@@ -92,6 +92,17 @@ fn parse_search_hint_body(body: &str) -> Vec<SearchHint> {
     serde_json::from_value::<Vec<SearchHint>>(hints.clone()).unwrap_or_default()
 }
 
+/// Pull `TotalRecordCount` out of a `/Users/{id}/Items` response (or 0 if
+/// the field isn't there). Used by paginated `items()` to know when to stop.
+fn parse_total_record_count(body: &str) -> i64 {
+    let Some(v) = parse_json_lenient(body) else {
+        return 0;
+    };
+    v.get("TotalRecordCount")
+        .and_then(|n| n.as_i64())
+        .unwrap_or(0)
+}
+
 /// Same forgiving parse for `/Users/{id}/Items` responses.
 fn parse_items_body(body: &str) -> Vec<BaseItem> {
     let Some(v) = parse_json_lenient(body) else {
@@ -140,7 +151,10 @@ impl JellyfinClient {
         let http = reqwest::Client::builder()
             .user_agent(format!("{}/{}", CLIENT_NAME, CLIENT_VERSION))
             .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(15))
+            // A single request can be a full library listing on a big
+            // server — give it plenty of headroom. Pagination keeps any
+            // individual page well under this.
+            .timeout(std::time::Duration::from_secs(120))
             .build()?;
         let device_name = whoami::fallible::hostname().unwrap_or_else(|_| "fin-cli".to_string());
         Ok(Self {
@@ -245,6 +259,12 @@ impl JellyfinClient {
     }
 
     /// Fetch children of a parent (library, folder, album, playlist, …).
+    ///
+    /// When `limit` is `None` the endpoint is paginated internally with
+    /// `StartIndex` + `Limit=500`, driven by the server-reported
+    /// `TotalRecordCount`. This is the difference between "we asked without
+    /// a limit and Jellyfin capped us at its silent default" and "we got
+    /// everything". Passing `Some(l)` requests exactly one page of that size.
     pub async fn items(
         &self,
         parent_id: Option<&str>,
@@ -253,6 +273,52 @@ impl JellyfinClient {
         sort_by: Option<&str>,
         limit: Option<u32>,
     ) -> Result<Vec<BaseItem>> {
+        // Single-page mode — caller wants exactly N results.
+        if let Some(l) = limit {
+            let (items, _) = self
+                .items_page(parent_id, include_types, recursive, sort_by, l, 0)
+                .await?;
+            return Ok(items);
+        }
+
+        // Paginated mode — page through until we've collected every item.
+        const PAGE: u32 = 500;
+        let mut all: Vec<BaseItem> = Vec::new();
+        let mut start: u32 = 0;
+        loop {
+            let (items, total) = self
+                .items_page(parent_id, include_types, recursive, sort_by, PAGE, start)
+                .await?;
+            let got = items.len() as u32;
+            all.extend(items);
+            // Stop when the server ran out of matches …
+            if got == 0 || got < PAGE {
+                break;
+            }
+            // … or when we've collected everything the server said existed.
+            if total > 0 && (all.len() as i64) >= total {
+                break;
+            }
+            start += got;
+            // Belt-and-braces guard against a runaway server response.
+            if all.len() > 1_000_000 {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
+    /// One page of `/Users/{id}/Items`. Returns `(items, total_record_count)`
+    /// so the caller can drive pagination.
+    async fn items_page(
+        &self,
+        parent_id: Option<&str>,
+        include_types: &[&str],
+        recursive: bool,
+        sort_by: Option<&str>,
+        limit: u32,
+        start_index: u32,
+    ) -> Result<(Vec<BaseItem>, i64)> {
         let user_id = self.user_id.as_ref().context("not authenticated")?;
         let mut q: Vec<(String, String)> = vec![
             (
@@ -260,6 +326,8 @@ impl JellyfinClient {
                 "PrimaryImageAspectRatio,ProductionYear,Overview,Container,MediaSources".into(),
             ),
             ("Recursive".into(), recursive.to_string()),
+            ("Limit".into(), limit.to_string()),
+            ("StartIndex".into(), start_index.to_string()),
         ];
         if let Some(p) = parent_id {
             q.push(("ParentId".into(), p.into()));
@@ -271,19 +339,21 @@ impl JellyfinClient {
             q.push(("SortBy".into(), s.into()));
             q.push(("SortOrder".into(), "Ascending".into()));
         }
-        if let Some(l) = limit {
-            q.push(("Limit".into(), l.to_string()));
-        }
         let url = self.url(&format!("/Users/{}/Items", user_id));
-        let resp = self
+        debug!(?url, start_index, limit, "items page");
+        let body = self
             .http
             .get(&url)
             .headers(self.headers()?)
             .query(&q)
             .send()
+            .await?
+            .error_for_status()?
+            .text()
             .await?;
-        let res: SearchResult = resp.error_for_status()?.json().await?;
-        Ok(res.items)
+        let items = parse_items_body(&body);
+        let total = parse_total_record_count(&body);
+        Ok((items, total))
     }
 
     /// Recent / resume items on the home screen.
@@ -410,18 +480,44 @@ impl JellyfinClient {
             .await
     }
 
+    /// All items in a playlist, paginated by `StartIndex` + `Limit=500`.
     pub async fn playlist_items(&self, playlist_id: &str) -> Result<Vec<BaseItem>> {
         let user_id = self.user_id.as_ref().context("not authenticated")?;
         let url = self.url(&format!("/Playlists/{}/Items", playlist_id));
-        let resp = self
-            .http
-            .get(&url)
-            .headers(self.headers()?)
-            .query(&[("UserId", user_id.as_str())])
-            .send()
-            .await?;
-        let res: SearchResult = resp.error_for_status()?.json().await?;
-        Ok(res.items)
+        const PAGE: u32 = 500;
+        let mut all: Vec<BaseItem> = Vec::new();
+        let mut start: u32 = 0;
+        loop {
+            let body = self
+                .http
+                .get(&url)
+                .headers(self.headers()?)
+                .query(&[
+                    ("UserId", user_id.as_str()),
+                    ("Limit", &PAGE.to_string()),
+                    ("StartIndex", &start.to_string()),
+                ])
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            let page = parse_items_body(&body);
+            let got = page.len() as u32;
+            let total = parse_total_record_count(&body);
+            all.extend(page);
+            if got == 0 || got < PAGE {
+                break;
+            }
+            if total > 0 && (all.len() as i64) >= total {
+                break;
+            }
+            start += got;
+            if all.len() > 1_000_000 {
+                break;
+            }
+        }
+        Ok(all)
     }
 
     pub async fn create_playlist(

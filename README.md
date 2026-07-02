@@ -1,6 +1,6 @@
 # fin
 
-> a neon-electric Jellyfin client for the terminal — powered by `mpv` and Chromecast
+> a Jellyfin client for the terminal — powered by `mpv` and Chromecast
 
 ![fin — neon-electric Jellyfin TUI](.github/assets/preview.png)
 

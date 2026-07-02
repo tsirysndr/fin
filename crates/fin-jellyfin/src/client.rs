@@ -539,11 +539,7 @@ impl JellyfinClient {
     /// `content_type_for_url()` labels it correctly for the receiver.
     pub fn content_type_for_url(url: &str) -> &'static str {
         let path = url.split('?').next().unwrap_or(url);
-        let ext = path
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
+        let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         match ext.as_str() {
             "m3u8" => "application/vnd.apple.mpegurl",
             "mpd" => "application/dash+xml",

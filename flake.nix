@@ -4,10 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    crane = {
-      url = "github:ipetkov/crane";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # Current crane doesn't expose a `nixpkgs` input, so we don't follow it.
+    crane.url = "github:ipetkov/crane";
 
     fenix = {
       url = "github:nix-community/fenix";
@@ -48,14 +46,15 @@
           strictDeps = true;
 
           # No native TLS or system libs needed — pure Rust deps.
+          # Modern nixpkgs (post-25.05) auto-links the Darwin SDK, so no
+          # framework references here — `darwin.apple_sdk_11_0` was removed
+          # as a legacy compatibility stub.
           nativeBuildInputs = [
             pkgs.pkg-config
           ];
 
           buildInputs = lib.optionals pkgs.stdenv.isDarwin [
             pkgs.libiconv
-            pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-            pkgs.darwin.apple_sdk.frameworks.Security
           ];
 
           # Workspace has one bin target — build just that.
@@ -158,8 +157,6 @@
             pkg-config
           ] ++ lib.optionals pkgs.stdenv.isDarwin [
             libiconv
-            darwin.apple_sdk.frameworks.SystemConfiguration
-            darwin.apple_sdk.frameworks.Security
           ];
 
           shellHook = ''

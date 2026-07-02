@@ -8,6 +8,31 @@ use uuid::Uuid;
 
 use crate::models::{AuthResult, BaseItem, SearchHint, SearchResult, UserViewsResult};
 
+/// Pick the URL extension for a direct stream.
+///
+/// Preference: whatever Jellyfin reported in `Container`. When that's absent
+/// (e.g. items came from `/Search/Hints`, which doesn't include container
+/// info), fall back to a receiver-friendly default. We deliberately do NOT
+/// hardcode `mp3` / `mp4` — Jellyfin honors any container extension it
+/// supports (`flac`, `ogg`, `opus`, `webm`, `mkv`, …).
+fn source_container(item: &BaseItem, is_audio: bool) -> String {
+    if let Some(c) = item.container.as_deref() {
+        // Jellyfin sometimes returns a comma-separated list ("mp3,mpeg"),
+        // pick the first entry.
+        if let Some(first) = c.split(',').next() {
+            let first = first.trim();
+            if !first.is_empty() {
+                return first.to_ascii_lowercase();
+            }
+        }
+    }
+    if is_audio {
+        "mp3".into()
+    } else {
+        "mp4".into()
+    }
+}
+
 /// Normalize every JSON object key to PascalCase in place.
 ///
 /// Different Jellyfin versions ship different casings — 10.8 sends PascalCase
@@ -232,7 +257,7 @@ impl JellyfinClient {
         let mut q: Vec<(String, String)> = vec![
             (
                 "Fields".into(),
-                "PrimaryImageAspectRatio,ProductionYear,Overview".into(),
+                "PrimaryImageAspectRatio,ProductionYear,Overview,Container,MediaSources".into(),
             ),
             ("Recursive".into(), recursive.to_string()),
         ];
@@ -280,7 +305,7 @@ impl JellyfinClient {
         let user_id = self.user_id.as_ref().context("not authenticated")?;
         let mut q: Vec<(String, String)> = vec![
             ("Limit".into(), limit.to_string()),
-            ("Fields".into(), "ProductionYear".into()),
+            ("Fields".into(), "ProductionYear,Container".into()),
         ];
         if let Some(p) = parent_id {
             q.push(("ParentId".into(), p.into()));
@@ -358,7 +383,7 @@ impl JellyfinClient {
             ("limit".into(), limit.to_string()),
             (
                 "fields".into(),
-                "PrimaryImageAspectRatio,ProductionYear,Overview".into(),
+                "PrimaryImageAspectRatio,ProductionYear,Overview,Container,MediaSources".into(),
             ),
         ];
         if !include_types.is_empty() {
@@ -458,30 +483,43 @@ impl JellyfinClient {
         Ok(())
     }
 
-    /// Build a direct-playback stream URL. `format` chooses between original stream and HLS.
+    /// Build a stream URL for `item`.
+    ///
+    /// - `Direct` — uses `item.container` (`.mp3` / `.flac` / `.mp4` / `.mkv`
+    ///   / …) so the URL matches the source and no unnecessary transcoding
+    ///   is triggered. Falls back to a sensible generic when Jellyfin
+    ///   didn't send a container.
+    /// - `Hls` — `main.m3u8` served by Jellyfin's HLS transcoder.
     pub fn stream_url(&self, item: &BaseItem, format: StreamFormat) -> Result<String> {
         let token = self.access_token.as_deref().context("no access token")?;
         let kind = item.kind();
         let is_audio = kind.is_audio() || item.media_type.as_deref() == Some("Audio");
-        let container = if is_audio { "mp3" } else { "mp4" };
-        let path = match (format, is_audio) {
-            (StreamFormat::Hls, true) => format!("/Audio/{}/main.m3u8", item.id),
-            (StreamFormat::Hls, false) => format!("/Videos/{}/main.m3u8", item.id),
-            (StreamFormat::Direct, true) => {
-                format!("/Audio/{}/stream.{}", item.id, container)
-            }
-            (StreamFormat::Direct, false) => {
-                format!("/Videos/{}/stream.{}", item.id, container)
+
+        let path = match format {
+            StreamFormat::Hls if is_audio => format!("/Audio/{}/main.m3u8", item.id),
+            StreamFormat::Hls => format!("/Videos/{}/main.m3u8", item.id),
+            StreamFormat::Direct => {
+                let container = source_container(item, is_audio);
+                if is_audio {
+                    format!("/Audio/{}/stream.{}", item.id, container)
+                } else {
+                    format!("/Videos/{}/stream.{}", item.id, container)
+                }
             }
         };
+
         let mut params: Vec<(&str, String)> = vec![
             ("api_key", token.to_string()),
             ("DeviceId", self.device_id.clone()),
-            ("Static", "true".into()),
+            ("PlaySessionId", Uuid::new_v4().to_string()),
         ];
-        if matches!(format, StreamFormat::Hls) {
-            params.push(("PlaySessionId", Uuid::new_v4().to_string()));
+        // `Static=true` skips server-side transcoding — safe because the
+        // URL extension already matches the source container.
+        if matches!(format, StreamFormat::Direct) {
+            params.push(("Static", "true".into()));
+            params.push(("MediaSourceId", item.id.clone()));
         }
+
         let qs = params
             .into_iter()
             .map(|(k, v)| {
@@ -494,6 +532,42 @@ impl JellyfinClient {
             .collect::<Vec<_>>()
             .join("&");
         Ok(format!("{}{}?{}", self.base_url, path, qs))
+    }
+
+    /// Determine the MIME type from the URL a stream URL points at.
+    /// Single source of truth: whatever `stream_url()` produced,
+    /// `content_type_for_url()` labels it correctly for the receiver.
+    pub fn content_type_for_url(url: &str) -> &'static str {
+        let path = url.split('?').next().unwrap_or(url);
+        let ext = path
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "m3u8" => "application/vnd.apple.mpegurl",
+            "mpd" => "application/dash+xml",
+            "mp4" | "m4v" => "video/mp4",
+            "mkv" => "video/x-matroska",
+            "webm" => "video/webm",
+            "mov" => "video/quicktime",
+            "ts" => "video/mp2t",
+            "avi" => "video/x-msvideo",
+            "mp3" => "audio/mpeg",
+            "m4a" | "aac" => "audio/aac",
+            "ogg" | "oga" => "audio/ogg",
+            "opus" => "audio/opus",
+            "flac" => "audio/flac",
+            "wav" => "audio/wav",
+            "wma" => "audio/x-ms-wma",
+            _ => {
+                if url.contains("/Videos/") {
+                    "video/mp4"
+                } else {
+                    "audio/mpeg"
+                }
+            }
+        }
     }
 
     /// Primary image URL for an item, suitable for tile previews.

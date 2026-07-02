@@ -1,0 +1,212 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macos-amd64
+            os: macos-13
+            target: x86_64-apple-darwin
+            use_cross: false
+          - label: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+            use_cross: false
+          - label: linux-amd64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+          - label: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build (cargo)
+        if: ${{ !matrix.use_cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin fin
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: cross build --release --locked --target ${{ matrix.target }} --bin fin
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          name="fin-${version}-${{ matrix.label }}"
+          src="target/${{ matrix.target }}/release/fin"
+          mkdir -p dist/staging
+          cp "$src" dist/staging/fin
+          cp README.md LICENSE dist/staging/
+          tar -C dist/staging -czf "dist/${name}.tar.gz" .
+          (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -lh dist
+
+      - name: Install dpkg-deb and rpmbuild
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev rpm
+
+      - name: Build .deb
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          version_no_v="${version#v}"
+          case "${{ matrix.label }}" in
+            linux-amd64)   deb_arch=amd64 ;;
+            linux-aarch64) deb_arch=arm64 ;;
+          esac
+          pkg_root="dist/debian/${deb_arch}"
+          mkdir -p "$pkg_root/usr/local/bin"
+          install -m 0755 "target/${{ matrix.target }}/release/fin" "$pkg_root/usr/local/bin/fin"
+          sed -i "s/^Version: .*/Version: ${version_no_v}/" "$pkg_root/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$pkg_root" "dist/fin_${version_no_v}_${deb_arch}.deb"
+
+      - name: Build .rpm
+        if: matrix.label == 'linux-amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          version_no_v="${version#v}"
+          rpm_arch=amd64
+          rpm_target=x86_64
+          src_root="dist/rpm/${rpm_arch}"
+          mkdir -p "${src_root}/usr/local/bin"
+          install -m 0755 "target/${{ matrix.target }}/release/fin" "${src_root}/usr/local/bin/fin"
+          sed -i "s/^Version:        .*/Version:        ${version_no_v}/" "${src_root}/fin.spec"
+
+          rpm_top="$(pwd)/dist/rpmbuild"
+          mkdir -p "${rpm_top}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          cp -r "${src_root}" "${rpm_top}/SOURCES/${rpm_arch}"
+          rpmbuild --define "_topdir ${rpm_top}" \
+                   --define "_sourcedir ${rpm_top}/SOURCES" \
+                   --target "${rpm_target}" \
+                   -bb "${src_root}/fin.spec"
+          find "${rpm_top}/RPMS" -name '*.rpm' -exec mv {} dist/ \;
+
+      - name: Checksum packages
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in *.deb *.rpm; do
+            [ -e "$f" ] || continue
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+          ls -lh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: |
+            dist/*.tar.gz*
+            dist/*.deb*
+            dist/*.rpm*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show artifacts
+        run: ls -lh dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+      - name: Check Gemfury secrets
+        id: gemfury
+        env:
+          FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
+          FURY_ACCOUNT: ${{ secrets.FURY_ACCOUNT }}
+        run: |
+          if [ -n "$FURY_TOKEN" ] && [ -n "$FURY_ACCOUNT" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Gemfury secrets not set; skipping push"
+          fi
+
+      - name: Push .deb and .rpm to Gemfury
+        if: steps.gemfury.outputs.available == 'true'
+        env:
+          FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
+          FURY_ACCOUNT: ${{ secrets.FURY_ACCOUNT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for pkg in dist/*.deb dist/*.rpm; do
+            echo "Pushing $pkg to Gemfury (${FURY_ACCOUNT})"
+            curl -fsS -F package=@"${pkg}" \
+              "https://${FURY_TOKEN}@push.fury.io/${FURY_ACCOUNT}/"
+            echo
+          done

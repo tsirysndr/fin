@@ -154,6 +154,7 @@ impl App {
                         production_year: None,
                         run_time_ticks: q.duration_secs.map(|s| (s * 10_000_000) as i64),
                         media_type: None,
+                        container: None,
                         index_number: None,
                         parent_index_number: None,
                         image_tags: None,
@@ -303,11 +304,9 @@ impl App {
     fn base_item_to_queue(&self, item: &BaseItem, format: StreamFormat) -> Result<QueueItem> {
         let url = self.jf().stream_url(item, format)?;
         let is_video = item.kind().is_video();
-        let content_type = if is_video {
-            "video/mp4".to_string()
-        } else {
-            "audio/mpeg".to_string()
-        };
+        // Content type derives from the URL that stream_url() actually built,
+        // so it always matches what the receiver will be handed.
+        let content_type = JellyfinClient::content_type_for_url(&url).to_string();
         let image_url = item
             .image_tags
             .as_ref()
@@ -398,10 +397,12 @@ impl App {
             self.set_status("Nothing playable here.");
             return;
         }
-        let format = match *self.renderer_kind.lock() {
-            RendererKind::Mpv => StreamFormat::Direct,
-            RendererKind::Chromecast => StreamFormat::Hls,
-        };
+        // Both renderers get a Direct URL — Jellyfin serves the source
+        // container as-is so no unnecessary transcoding happens. Chromecast
+        // handles MP3/AAC/FLAC/Opus audio and H.264 MP4 video natively;
+        // for anything else you can force HLS transcoding with `--hls`
+        // from the CLI (or by switching the renderer's format).
+        let format = StreamFormat::Direct;
         let mut queue_items = Vec::with_capacity(items.len());
         for it in &items {
             match self.base_item_to_queue(it, format) {

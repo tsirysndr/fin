@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use tokio::sync::oneshot;
-use tracing::error;
+use tracing::{debug, error, warn};
 
 use rust_cast::channels::media::{
     IdleReason, Image, Media, Metadata, MovieMediaMetadata, MusicTrackMediaMetadata, PlayerState,
@@ -214,9 +214,18 @@ fn cast_worker(
     let mut last_heartbeat = Instant::now();
     let mut last_status = Instant::now();
 
-    // We run the worker single-threaded — rust_cast's channels aren't
-    // thread-safe. Between commands we poll media status for progress
-    // updates and auto-advance on FINISHED.
+    // Auto-advance state — tracks whether the receiver was in the middle of
+    // playing our media *last time we polled*. This is the signal we use to
+    // detect end-of-track: when the receiver's active media disappears (or
+    // reports IDLE/FINISHED) after having been Playing/Paused/Buffering, we
+    // treat that as end-of-track and load the next queue item.
+    //
+    // The previous implementation polled with `Some(media_session_id)`.
+    // Chromecast invalidates that session id the instant playback ends, so
+    // subsequent calls returned an empty `entries` list and we never saw
+    // the FINISHED signal — playback silently stopped after one track.
+    let mut was_active_media = false;
+
     loop {
         match rx.recv_timeout(Duration::from_millis(300)) {
             Ok(CastCommand::Shutdown) => {
@@ -234,16 +243,21 @@ fn cast_worker(
             last_heartbeat = Instant::now();
         }
 
-        if last_status.elapsed() > Duration::from_millis(750) {
+        if last_status.elapsed() > Duration::from_millis(500) {
             last_status = Instant::now();
-            let (dest, media_id) = {
-                let sess = session.lock();
-                (sess.app_transport.clone(), sess.media_session_id)
-            };
-            if let Some(id) = media_id {
-                if let Ok(status) = rc.media.get_status(dest.as_str(), Some(id)) {
-                    let mut advanced = false;
+            let dest = session.lock().app_transport.clone();
+
+            // Query WITHOUT a session id — returns all active media on the
+            // receiver. Empty entries means "nothing playing" which is the
+            // end-of-track signal we care about.
+            match rc.media.get_status(dest.as_str(), None) {
+                Ok(status) => {
+                    let mut ended = false;
                     if let Some(entry) = status.entries.first() {
+                        // Keep our tracked session id in sync — Chromecast
+                        // hands out a new one for each `load()`.
+                        session.lock().media_session_id = Some(entry.media_session_id);
+
                         let mut s = state.lock();
                         s.position_secs = entry.current_time.unwrap_or(0.0) as f64;
                         if let Some(m) = &entry.media {
@@ -252,27 +266,58 @@ fn cast_worker(
                             }
                         }
                         match entry.player_state {
-                            PlayerState::Playing => s.status = PlaybackStatus::Playing,
-                            PlayerState::Paused => s.status = PlaybackStatus::Paused,
-                            PlayerState::Buffering => s.status = PlaybackStatus::Buffering,
-                            PlayerState::Idle => {
-                                if matches!(entry.idle_reason, Some(IdleReason::Finished)) {
-                                    advanced = true;
-                                } else {
+                            PlayerState::Playing => {
+                                s.status = PlaybackStatus::Playing;
+                                was_active_media = true;
+                            }
+                            PlayerState::Paused => {
+                                s.status = PlaybackStatus::Paused;
+                                was_active_media = true;
+                            }
+                            PlayerState::Buffering => {
+                                s.status = PlaybackStatus::Buffering;
+                                was_active_media = true;
+                            }
+                            PlayerState::Idle => match entry.idle_reason {
+                                Some(IdleReason::Finished) => {
+                                    ended = true;
+                                }
+                                Some(IdleReason::Error) => {
+                                    // Skip on error too so a single bad
+                                    // stream doesn't hang the whole queue.
+                                    ended = true;
+                                }
+                                _ => {
                                     s.status = PlaybackStatus::Idle;
                                 }
-                            }
+                            },
                         }
+                    } else if was_active_media {
+                        // No active media *right now*, but we had media
+                        // playing the last time we looked → the receiver
+                        // finished the track and dropped the session.
+                        ended = true;
                     }
-                    if advanced {
+
+                    if ended {
+                        was_active_media = false;
                         if queue.advance().is_some() {
                             if let Some(next) = queue.current() {
-                                let _ = load_media(&rc, &session, &next, &state);
+                                if let Err(e) = load_media(&rc, &session, &next, &state) {
+                                    warn!(?e, "chromecast: failed to load next queue item");
+                                    state.lock().status = PlaybackStatus::Idle;
+                                }
                             }
                         } else {
-                            state.lock().status = PlaybackStatus::Idle;
+                            let mut s = state.lock();
+                            s.status = PlaybackStatus::Idle;
+                            s.now_playing = None;
+                            s.current_index = None;
                         }
                     }
+                }
+                Err(e) => {
+                    debug!(?e, "chromecast: get_status failed");
                 }
             }
         }

@@ -1,0 +1,14 @@
+Package: fin
+Version: 0.1.0
+Section: sound
+Priority: optional
+Architecture: amd64
+Maintainer: Tsiry Sandratraina <tsiry.sndr@rocksky.app>
+Homepage: https://github.com/tsirysndr/fin
+Depends: libc6, mpv
+Description: A neon-electric Jellyfin TUI client for mpv & Chromecast
+ fin is a Rust TUI + one-shot CLI that talks to your Jellyfin server,
+ searches your library, manages playlists, and pushes streams to either
+ your local mpv window or any Chromecast on your network. Chromecast
+ playback is fully queued — enqueue, play-next, skip, resume, all from
+ the terminal.

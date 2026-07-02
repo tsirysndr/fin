@@ -105,6 +105,11 @@ pub struct BaseItem {
     pub run_time_ticks: Option<i64>,
     #[serde(default)]
     pub media_type: Option<String>,
+    /// Source container reported by Jellyfin — e.g. `"mp3"`, `"flac"`,
+    /// `"mkv"`, `"mp4"`. Used to build stream URLs that match the source
+    /// so no unnecessary transcoding happens.
+    #[serde(default)]
+    pub container: Option<String>,
     #[serde(default)]
     pub index_number: Option<i32>,
     #[serde(default)]
@@ -233,6 +238,7 @@ impl SearchHint {
             production_year: self.production_year,
             run_time_ticks: self.run_time_ticks,
             media_type: self.media_type,
+            container: None,
             index_number: None,
             parent_index_number: None,
             image_tags: None,

@@ -2,6 +2,8 @@
 
 > a neon-electric Jellyfin client for the terminal — powered by `mpv` and Chromecast
 
+![fin — neon-electric Jellyfin TUI](.github/assets/preview.png)
+
 `fin` is a Rust TUI + one-shot CLI that talks to your Jellyfin server, searches
 your library, manages playlists, and pushes streams to either your local **mpv**
 window or any **Chromecast** on your network. Chromecast playback is fully
@@ -34,21 +36,93 @@ queued — enqueue, play-next, skip, resume, all from the terminal.
 
 ## Install
 
-`fin` requires **`mpv`** on your `$PATH` (it's used as the local renderer and
-as a required preflight check even when casting).
+`fin` needs **`mpv`** on your `$PATH` at runtime. Every install path below
+either bundles it or pulls it in as a dependency.
+
+### macOS / Linux — Homebrew
+
+```bash
+brew install tsirysndr/tap/fin
+```
+
+The formula pulls in `mpv` automatically.
+
+### Debian / Ubuntu — `.deb`
+
+Download the `.deb` for your architecture from the
+[latest release](https://github.com/tsirysndr/fin/releases/latest) and:
+
+```bash
+# amd64
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.1.0_amd64.deb
+sudo apt install ./fin_0.1.0_amd64.deb
+
+# arm64 (Raspberry Pi 4/5, Apple-silicon VM, …)
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.1.0_arm64.deb
+sudo apt install ./fin_0.1.0_arm64.deb
+```
+
+`apt` will pull in `mpv` automatically as a dependency.
+
+Or add the Gemfury apt repo once and `apt install` normally:
+
+```bash
+echo "deb [trusted=yes] https://apt.fury.io/tsirysndr/ /" \
+  | sudo tee /etc/apt/sources.list.d/tsirysndr.list
+sudo apt update && sudo apt install fin
+```
+
+### Fedora / RHEL / openSUSE — `.rpm`
+
+```bash
+sudo dnf install \
+  https://github.com/tsirysndr/fin/releases/latest/download/fin-0.1.0-1.x86_64.rpm
+```
+
+Or via the Gemfury yum repo:
+
+```bash
+sudo tee /etc/yum.repos.d/tsirysndr.repo <<'EOF'
+[tsirysndr]
+name=tsirysndr
+baseurl=https://yum.fury.io/tsirysndr/
+enabled=1
+gpgcheck=0
+EOF
+sudo dnf install fin
+```
+
+### Arch — from AUR / source
+
+`mpv` from the official repos, then:
+
+```bash
+sudo pacman -S mpv
+cargo install --git https://github.com/tsirysndr/fin --bin fin
+```
+
+### Prebuilt tarballs
+
+For any other platform, grab the tarball for your arch from the
+[releases page](https://github.com/tsirysndr/fin/releases/latest):
+
+- `fin-<version>-linux-amd64.tar.gz`
+- `fin-<version>-linux-aarch64.tar.gz`
+- `fin-<version>-macos-amd64.tar.gz`
+- `fin-<version>-macos-aarch64.tar.gz`
+
+Each includes the `fin` binary + README + LICENSE. Install `mpv` yourself:
 
 ```bash
 # macOS
 brew install mpv
-
 # Debian / Ubuntu
 sudo apt install mpv
-
 # Arch
 sudo pacman -S mpv
 ```
 
-Then build fin from source:
+### From source
 
 ```bash
 git clone https://github.com/tsirysndr/fin

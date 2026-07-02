@@ -341,7 +341,9 @@ async fn cmd_search(cfg: &Config, query: &str, kind: Option<String>, limit: u32)
 
 async fn cmd_play(cfg: &Config, args: PlayArgs, queue: bool) -> Result<()> {
     let client = make_client(cfg)?;
-    let format = if args.hls || cfg.renderer == RendererPref::Chromecast {
+    // Direct stream by default — Jellyfin serves the source container as-is,
+    // so no unnecessary transcoding happens. `--hls` forces the m3u8 path.
+    let format = if args.hls {
         StreamFormat::Hls
     } else {
         StreamFormat::Direct
@@ -362,8 +364,8 @@ async fn cmd_play(cfg: &Config, args: PlayArgs, queue: bool) -> Result<()> {
                     Some(&hit.id),
                     &["Audio"],
                     false,
-                    Some("SortName"),
-                    Some(500),
+                    Some("ParentIndexNumber,IndexNumber,SortName"),
+                    None,
                 )
                 .await?
         }
@@ -377,15 +379,13 @@ async fn cmd_play(cfg: &Config, args: PlayArgs, queue: bool) -> Result<()> {
             id: it.id.clone(),
             title: it.name.clone(),
             subtitle: it.subtitle(),
-            stream_url: url,
+            stream_url: url.clone(),
             image_url: None,
             duration_secs: it.duration_secs(),
             is_video,
-            content_type: if is_video {
-                "video/mp4".into()
-            } else {
-                "audio/mpeg".into()
-            },
+            // Content-Type follows the URL we just built — the single source
+            // of truth so the receiver knows exactly what it's getting.
+            content_type: JellyfinClient::content_type_for_url(&url).to_string(),
         });
     }
     let (renderer, label) = build_renderer(cfg).await?;

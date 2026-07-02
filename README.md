@@ -11,6 +11,11 @@ queued — enqueue, play-next, skip, resume, all from the terminal.
 
 - **Ratatui-based TUI** with a neon-electric palette (teal / cyan / violet).
 - **fzf-style instant search** — results update on every keystroke.
+- **Drill-in navigation** — Enter on an album lists its tracks, Enter on a
+  series lists its episodes, Enter on a playlist lists its items. `x`
+  plays the whole container in one go.
+- **No list truncation** — Music, Videos, and Playlists fetch every item
+  the server has, so nothing stays hidden past an arbitrary limit.
 - **Two renderers**, one interface:
   - `mpv` (local) — spawned automatically and driven via its JSON IPC socket.
   - `chromecast` — device discovery via mDNS, playback through the Default
@@ -163,14 +168,19 @@ fin config --show|--path    # inspect config
 
 ## Keybindings (TUI)
 
+Tab order — the default screen is **Music**:
+
+  `1` Music • `2` Videos • `3` Playlists • `4` Queue • `5` Search • `6` Devices • `7` Settings
+
 | Key                          | Action                              |
 |------------------------------|-------------------------------------|
 | `Tab` / `Shift+Tab`          | next / prev screen                  |
-| `1`…`8`                      | jump to Home / Search / Music / Videos / Playlists / Queue / Devices / Settings |
+| `1`…`7`                      | jump to Music / Videos / Playlists / Queue / Search / Devices / Settings |
 | `/`                          | jump to Search & focus input        |
 | `↑` `↓` / `k` `j`            | move selection                      |
 | `PgUp` / `PgDown`            | jump 10 rows                        |
-| `Enter`                      | play the highlighted item (or connect to the highlighted Chromecast) |
+| `Enter`                      | **drill in** on a container (album, series, playlist) — plays a leaf (track, episode, movie); on Devices → connect to Chromecast; on Settings → switch server |
+| `x`                          | play the highlighted container as one queue **without** drilling in (album → all tracks, playlist → all items) |
 | `a`                          | enqueue the highlighted item        |
 | `n`                          | play the highlighted item **next**  |
 | `Space` or `p`               | pause / resume                      |
@@ -179,6 +189,7 @@ fin config --show|--path    # inspect config
 | `+` / `-`                    | volume up / down                    |
 | `m`                          | switch to local mpv renderer        |
 | `t`                          | cycle to the next saved Jellyfin server |
+| `Esc`                        | pop the current drill-in (back to the parent list) |
 | `r`                          | refresh the current screen          |
 | `Esc`                        | leave the search input / close open playlist |
 | `q` / `Ctrl-C`               | quit                                |

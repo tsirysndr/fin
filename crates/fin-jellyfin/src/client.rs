@@ -6,7 +6,87 @@ use serde_json::json;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::models::{AuthResult, BaseItem, SearchHintResult, SearchResult, UserViewsResult};
+use crate::models::{AuthResult, BaseItem, SearchHint, SearchResult, UserViewsResult};
+
+/// Normalize every JSON object key to PascalCase in place.
+///
+/// Different Jellyfin versions ship different casings — 10.8 sends PascalCase
+/// (`Items`, `Id`), 10.10+ ships camelCase in the OpenAPI schema (`items`,
+/// `id`), and some proxies mangle things further. Our models are all
+/// `rename_all = "PascalCase"`, so we upcase the first letter of every key
+/// before decoding.
+fn normalize_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let entries: Vec<_> = std::mem::take(map).into_iter().collect();
+            for (k, mut v) in entries {
+                normalize_keys(&mut v);
+                let mut chars = k.chars();
+                let key = match chars.next() {
+                    Some(c) => c.to_uppercase().chain(chars).collect::<String>(),
+                    None => k,
+                };
+                map.insert(key, v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                normalize_keys(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_json_lenient(body: &str) -> Option<serde_json::Value> {
+    let mut v = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    normalize_keys(&mut v);
+    Some(v)
+}
+
+/// Deserialize `SearchHints` (Jellyfin's canonical shape) OR a bare array —
+/// after key normalization above, both PascalCase and camelCase responses
+/// arrive here with the same shape.
+fn parse_search_hint_body(body: &str) -> Vec<SearchHint> {
+    let Some(v) = parse_json_lenient(body) else {
+        return Vec::new();
+    };
+    let hints = v.get("SearchHints").or_else(|| v.get("Hints")).or({
+        if v.is_array() {
+            Some(&v)
+        } else {
+            None
+        }
+    });
+    let Some(hints) = hints else {
+        return Vec::new();
+    };
+    if hints.is_null() {
+        return Vec::new();
+    }
+    serde_json::from_value::<Vec<SearchHint>>(hints.clone()).unwrap_or_default()
+}
+
+/// Same forgiving parse for `/Users/{id}/Items` responses.
+fn parse_items_body(body: &str) -> Vec<BaseItem> {
+    let Some(v) = parse_json_lenient(body) else {
+        return Vec::new();
+    };
+    let items = v.get("Items").or({
+        if v.is_array() {
+            Some(&v)
+        } else {
+            None
+        }
+    });
+    let Some(items) = items else {
+        return Vec::new();
+    };
+    if items.is_null() {
+        return Vec::new();
+    }
+    serde_json::from_value::<Vec<BaseItem>>(items.clone()).unwrap_or_default()
+}
 
 const CLIENT_NAME: &str = "fin";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,6 +114,8 @@ impl JellyfinClient {
         let base_url = base_url.into().trim_end_matches('/').to_string();
         let http = reqwest::Client::builder()
             .user_agent(format!("{}/{}", CLIENT_NAME, CLIENT_VERSION))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
             .build()?;
         let device_name = whoami::fallible::hostname().unwrap_or_else(|_| "fin-cli".to_string());
         Ok(Self {
@@ -216,6 +298,11 @@ impl JellyfinClient {
     }
 
     /// Search hints — the fast fuzzy search endpoint Jellyfin's web client uses.
+    ///
+    /// Jellyfin's `/Search/Hints` endpoint returns a `{ SearchHints, TotalRecordCount }`
+    /// payload. If it comes back empty we fall back to `/Users/{id}/Items` with
+    /// `SearchTerm`, which is the endpoint the Jellyfin web app actually uses
+    /// for the media results grid — it's slower but has universal coverage.
     pub async fn search(
         &self,
         term: &str,
@@ -223,28 +310,73 @@ impl JellyfinClient {
         limit: u32,
     ) -> Result<Vec<BaseItem>> {
         let user_id = self.user_id.as_ref().context("not authenticated")?;
+
+        // Jellyfin's Kestrel binder is case-insensitive, but its OpenAPI
+        // documents camelCase — use that so proxies that pass query strings
+        // through untouched still route correctly.
         let mut q: Vec<(String, String)> = vec![
-            ("SearchTerm".into(), term.into()),
-            ("UserId".into(), user_id.clone()),
-            ("Limit".into(), limit.to_string()),
+            ("searchTerm".into(), term.into()),
+            ("userId".into(), user_id.clone()),
+            ("limit".into(), limit.to_string()),
+            ("includePeople".into(), "false".into()),
+            ("includeGenres".into(), "false".into()),
+            ("includeStudios".into(), "false".into()),
+            ("includeArtists".into(), "true".into()),
+            ("includeMedia".into(), "true".into()),
         ];
         if !include_types.is_empty() {
-            q.push(("IncludeItemTypes".into(), include_types.join(",")));
+            q.push(("includeItemTypes".into(), include_types.join(",")));
         }
         let url = self.url("/Search/Hints");
+        debug!(?url, term=%term, "search hints");
         let resp = self
             .http
             .get(&url)
             .headers(self.headers()?)
             .query(&q)
             .send()
+            .await?
+            .error_for_status()?;
+
+        // Read as text first so we can be forgiving about the response shape
+        // — Jellyfin has shipped PascalCase, camelCase, and (in some proxies)
+        // even snake_case variants across versions.
+        let body = resp.text().await?;
+        let hits = parse_search_hint_body(&body);
+        if !hits.is_empty() {
+            return Ok(hits.into_iter().map(|h| h.into_base_item()).collect());
+        }
+        debug!(
+            body_head = body.chars().take(240).collect::<String>().as_str(),
+            "search/hints returned no parsable hits — falling back to /Users/.../Items"
+        );
+
+        // Fallback: the same query against the Items endpoint.
+        let mut q2: Vec<(String, String)> = vec![
+            ("searchTerm".into(), term.into()),
+            ("recursive".into(), "true".into()),
+            ("limit".into(), limit.to_string()),
+            (
+                "fields".into(),
+                "PrimaryImageAspectRatio,ProductionYear,Overview".into(),
+            ),
+        ];
+        if !include_types.is_empty() {
+            q2.push(("includeItemTypes".into(), include_types.join(",")));
+        }
+        let url2 = self.url(&format!("/Users/{}/Items", user_id));
+        let body2 = self
+            .http
+            .get(&url2)
+            .headers(self.headers()?)
+            .query(&q2)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
             .await?;
-        let res: SearchHintResult = resp.error_for_status()?.json().await?;
-        Ok(res
-            .search_hints
-            .into_iter()
-            .map(|h| h.into_base_item())
-            .collect())
+        let items = parse_items_body(&body2);
+        Ok(items)
     }
 
     /// All playlists visible to the current user.

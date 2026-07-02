@@ -27,7 +27,7 @@ use fin_player::{
 };
 
 use crate::event::{spawn_event_loop, AppEvent};
-use crate::screens::{item_row_line, Screen};
+use crate::screens::{item_row_line, RowLayout, Screen};
 use crate::theme::{accent_style, base_style, muted_style, title_style, Palette};
 use crate::widgets::{neon_block, NeonTabs, PlayerBar};
 
@@ -40,13 +40,15 @@ pub struct App {
     pub renderer_label: Arc<Mutex<String>>,
     screen: Screen,
     // shared display state
-    home_recent: Arc<Mutex<Vec<BaseItem>>>,
-    home_resume: Arc<Mutex<Vec<BaseItem>>>,
     music_items: Arc<Mutex<Vec<BaseItem>>>,
     video_items: Arc<Mutex<Vec<BaseItem>>>,
     playlists: Arc<Mutex<Vec<BaseItem>>>,
     playlist_items: Arc<Mutex<Vec<BaseItem>>>,
     open_playlist: Arc<Mutex<Option<BaseItem>>>,
+    album_tracks: Arc<Mutex<Vec<BaseItem>>>,
+    open_album: Arc<Mutex<Option<BaseItem>>>,
+    series_children: Arc<Mutex<Vec<BaseItem>>>,
+    open_series: Arc<Mutex<Option<BaseItem>>>,
     search_results: Arc<Mutex<Vec<BaseItem>>>,
     devices: Arc<Mutex<Vec<CastDevice>>>,
     search_generation: Arc<AtomicU64>,
@@ -75,14 +77,16 @@ impl App {
             renderer: Arc::new(Mutex::new(renderer)),
             renderer_kind: Arc::new(Mutex::new(kind)),
             renderer_label: Arc::new(Mutex::new(label)),
-            screen: Screen::Home,
-            home_recent: Arc::new(Mutex::new(vec![])),
-            home_resume: Arc::new(Mutex::new(vec![])),
+            screen: Screen::Music,
             music_items: Arc::new(Mutex::new(vec![])),
             video_items: Arc::new(Mutex::new(vec![])),
             playlists: Arc::new(Mutex::new(vec![])),
             playlist_items: Arc::new(Mutex::new(vec![])),
             open_playlist: Arc::new(Mutex::new(None)),
+            album_tracks: Arc::new(Mutex::new(vec![])),
+            open_album: Arc::new(Mutex::new(None)),
+            series_children: Arc::new(Mutex::new(vec![])),
+            open_series: Arc::new(Mutex::new(None)),
             search_results: Arc::new(Mutex::new(vec![])),
             devices: Arc::new(Mutex::new(vec![])),
             search_generation: Arc::new(AtomicU64::new(0)),
@@ -104,14 +108,21 @@ impl App {
 
     fn current_list(&self) -> Vec<BaseItem> {
         match self.screen {
-            Screen::Home => {
-                let mut v = self.home_resume.lock().clone();
-                v.extend(self.home_recent.lock().clone());
-                v
-            }
             Screen::Search => self.search_results.lock().clone(),
-            Screen::Music => self.music_items.lock().clone(),
-            Screen::Videos => self.video_items.lock().clone(),
+            Screen::Music => {
+                if self.open_album.lock().is_some() {
+                    self.album_tracks.lock().clone()
+                } else {
+                    self.music_items.lock().clone()
+                }
+            }
+            Screen::Videos => {
+                if self.open_series.lock().is_some() {
+                    self.series_children.lock().clone()
+                } else {
+                    self.video_items.lock().clone()
+                }
+            }
             Screen::Playlists => {
                 if self.open_playlist.lock().is_some() {
                     self.playlist_items.lock().clone()
@@ -168,32 +179,21 @@ impl App {
 
     async fn load_screen(&self) {
         match self.screen {
-            Screen::Home => {
-                let jf = self.jf();
-                let resume = self.home_resume.clone();
-                let recent = self.home_recent.clone();
-                let status = self.status_message.clone();
-                tokio::spawn(async move {
-                    match jf.resume(12).await {
-                        Ok(v) => *resume.lock() = v,
-                        Err(e) => *status.lock() = Some(format!("resume: {}", e)),
-                    }
-                    match jf.latest(None, 24).await {
-                        Ok(v) => *recent.lock() = v,
-                        Err(e) => *status.lock() = Some(format!("latest: {}", e)),
-                    }
-                });
-            }
             Screen::Music => {
                 let jf = self.jf();
                 let out = self.music_items.clone();
                 let status = self.status_message.clone();
                 tokio::spawn(async move {
+                    // No limit — Jellyfin's `Limit=<omitted>` returns all
+                    // matching items. Users with 50k+ tracks get everything.
                     match jf
-                        .items(None, &["MusicAlbum"], true, Some("SortName"), Some(200))
+                        .items(None, &["MusicAlbum"], true, Some("SortName"), None)
                         .await
                     {
-                        Ok(v) => *out.lock() = v,
+                        Ok(v) => {
+                            *status.lock() = Some(format!("♪ {} album(s)", v.len()));
+                            *out.lock() = v;
+                        }
                         Err(e) => *status.lock() = Some(format!("music: {}", e)),
                     }
                 });
@@ -204,16 +204,13 @@ impl App {
                 let status = self.status_message.clone();
                 tokio::spawn(async move {
                     match jf
-                        .items(
-                            None,
-                            &["Movie", "Series"],
-                            true,
-                            Some("SortName"),
-                            Some(200),
-                        )
+                        .items(None, &["Movie", "Series"], true, Some("SortName"), None)
                         .await
                     {
-                        Ok(v) => *out.lock() = v,
+                        Ok(v) => {
+                            *status.lock() = Some(format!("▶ {} item(s)", v.len()));
+                            *out.lock() = v;
+                        }
                         Err(e) => *status.lock() = Some(format!("videos: {}", e)),
                     }
                 });
@@ -255,15 +252,20 @@ impl App {
         let gen = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
         if query.is_empty() {
             self.search_results.lock().clear();
+            *self.status_message.lock() = None;
             return;
         }
+        // Immediate feedback while the request is in flight.
+        *self.status_message.lock() = Some(format!("⌕ searching for “{}”…", query));
         let jf = self.jf();
         let out = self.search_results.clone();
         let status = self.status_message.clone();
         let generation = self.search_generation.clone();
         tokio::spawn(async move {
-            // small debounce lets fast typists coalesce keystrokes
-            tokio::time::sleep(Duration::from_millis(90)).await;
+            // Very small coalescing window — enough to avoid firing three
+            // requests when a fast typist hits three keys in <30ms, but not
+            // so long that the UI feels dead.
+            tokio::time::sleep(Duration::from_millis(40)).await;
             if generation.load(Ordering::SeqCst) != gen {
                 return;
             }
@@ -284,13 +286,14 @@ impl App {
             {
                 Ok(v) => {
                     if generation.load(Ordering::SeqCst) == gen {
-                        *status.lock() = Some(format!("{} match(es) for “{}”", v.len(), query));
+                        *status.lock() = Some(format!("⌕ {} match(es) for “{}”", v.len(), query));
                         *out.lock() = v;
                     }
                 }
                 Err(e) => {
                     if generation.load(Ordering::SeqCst) == gen {
-                        *status.lock() = Some(format!("search: {}", e));
+                        *status.lock() = Some(format!("⌕ search failed: {}", e));
+                        tracing::warn!(query=%query, error=?e, "jellyfin search failed");
                     }
                 }
             }
@@ -331,14 +334,14 @@ impl App {
                         Some(&item.id),
                         &["Audio"],
                         false,
-                        Some("SortName"),
-                        Some(500),
+                        Some("ParentIndexNumber,IndexNumber,SortName"),
+                        None,
                     )
                     .await
             }
             ItemKind::MusicArtist => {
                 self.jf()
-                    .items(Some(&item.id), &["Audio"], true, Some("Album"), Some(500))
+                    .items(Some(&item.id), &["Audio"], true, Some("Album"), None)
                     .await
             }
             ItemKind::Playlist => self.jf().playlist_items(&item.id).await,
@@ -348,8 +351,8 @@ impl App {
                         Some(&item.id),
                         &["Episode"],
                         true,
-                        Some("SortName"),
-                        Some(500),
+                        Some("ParentIndexNumber,IndexNumber,SortName"),
+                        None,
                     )
                     .await
             }
@@ -362,11 +365,26 @@ impl App {
             self.set_status("Nothing selected.");
             return;
         };
-        // If we're in the Playlists screen with no playlist open, opening the
-        // playlist should load its contents instead of playing.
-        if self.screen == Screen::Playlists && self.open_playlist.lock().is_none() {
-            self.open_playlist_selected(item).await;
-            return;
+
+        // Drill-in behaviour: Enter (PlayNow) on a *container* opens it and
+        // shows its children. `a` (Enqueue), `n` (PlayNext), and `x`
+        // (PlayContainer) always dispatch straight to the renderer.
+        if mode == PlayMode::PlayNow {
+            match (self.screen, item.kind()) {
+                (Screen::Playlists, _) if self.open_playlist.lock().is_none() => {
+                    self.open_playlist_selected(item).await;
+                    return;
+                }
+                (Screen::Music, ItemKind::MusicAlbum) if self.open_album.lock().is_none() => {
+                    self.open_album_selected(item).await;
+                    return;
+                }
+                (Screen::Videos, ItemKind::Series) if self.open_series.lock().is_none() => {
+                    self.open_series_selected(item).await;
+                    return;
+                }
+                _ => {}
+            }
         }
 
         let items = match self.expand_playable(item).await {
@@ -402,18 +420,79 @@ impl App {
             .unwrap_or_default();
         let count = queue_items.len();
         let result = match mode {
-            PlayMode::PlayNow => renderer.play(queue_items, 0).await,
+            PlayMode::PlayNow | PlayMode::PlayContainer => renderer.play(queue_items, 0).await,
             PlayMode::Enqueue => renderer.enqueue(queue_items).await,
             PlayMode::PlayNext => renderer.play_next(queue_items).await,
         };
         match result {
             Ok(()) => self.set_status(match mode {
                 PlayMode::PlayNow => format!("▶ Playing “{}” ({} item(s))", title, count),
+                PlayMode::PlayContainer => {
+                    format!("▶▶ Playing full container ({} item(s))", count)
+                }
                 PlayMode::Enqueue => format!("+ Queued {} item(s)", count),
                 PlayMode::PlayNext => format!("↥ Playing next: {} item(s)", count),
             }),
             Err(e) => self.set_status(format!("renderer: {}", e)),
         }
+    }
+
+    async fn open_album_selected(&mut self, item: BaseItem) {
+        let jf = self.jf();
+        let out = self.album_tracks.clone();
+        let open = self.open_album.clone();
+        let status = self.status_message.clone();
+        let id = item.id.clone();
+        let name = item.name.clone();
+        *open.lock() = Some(item);
+        tokio::spawn(async move {
+            match jf
+                .items(
+                    Some(&id),
+                    &["Audio"],
+                    false,
+                    Some("ParentIndexNumber,IndexNumber,SortName"),
+                    None,
+                )
+                .await
+            {
+                Ok(v) => {
+                    *status.lock() = Some(format!("◈ {} — {} track(s)", name, v.len()));
+                    *out.lock() = v;
+                }
+                Err(e) => *status.lock() = Some(format!("album: {}", e)),
+            }
+        });
+        self.list_state.select(Some(0));
+    }
+
+    async fn open_series_selected(&mut self, item: BaseItem) {
+        let jf = self.jf();
+        let out = self.series_children.clone();
+        let open = self.open_series.clone();
+        let status = self.status_message.clone();
+        let id = item.id.clone();
+        let name = item.name.clone();
+        *open.lock() = Some(item);
+        tokio::spawn(async move {
+            match jf
+                .items(
+                    Some(&id),
+                    &["Episode"],
+                    true,
+                    Some("ParentIndexNumber,IndexNumber,SortName"),
+                    None,
+                )
+                .await
+            {
+                Ok(v) => {
+                    *status.lock() = Some(format!("▶ {} — {} episode(s)", name, v.len()));
+                    *out.lock() = v;
+                }
+                Err(e) => *status.lock() = Some(format!("series: {}", e)),
+            }
+        });
+        self.list_state.select(Some(0));
     }
 
     async fn open_playlist_selected(&mut self, item: BaseItem) {
@@ -481,8 +560,6 @@ impl App {
         )?;
         *self.jellyfin.lock() = Arc::new(client);
         // Clear cached content — belongs to the *previous* server.
-        self.home_recent.lock().clear();
-        self.home_resume.lock().clear();
         self.music_items.lock().clear();
         self.video_items.lock().clear();
         self.playlists.lock().clear();
@@ -525,11 +602,17 @@ impl App {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlayMode {
+    /// Default Enter behaviour — drills into containers, plays leaves.
     PlayNow,
+    /// `a` — append to the current queue.
     Enqueue,
+    /// `n` — play next (insert after the current item).
     PlayNext,
+    /// `x` — play the whole container (or leaf) NOW, replacing the queue.
+    /// Skips drill-in so an album or playlist starts playing straight away.
+    PlayContainer,
 }
 
 pub async fn run_tui(app: App) -> Result<()> {
@@ -646,41 +729,38 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.load_screen().await;
         }
         (KeyCode::Char('1'), _) => {
-            app.screen = Screen::Home;
+            app.screen = Screen::Music;
+            *app.open_album.lock() = None;
             app.list_state.select(Some(0));
             app.load_screen().await;
         }
         (KeyCode::Char('2'), _) => {
-            app.screen = Screen::Search;
+            app.screen = Screen::Videos;
+            *app.open_series.lock() = None;
             app.list_state.select(Some(0));
-            app.search_input_focused = true;
+            app.load_screen().await;
         }
         (KeyCode::Char('3'), _) => {
-            app.screen = Screen::Music;
-            app.list_state.select(Some(0));
-            app.load_screen().await;
-        }
-        (KeyCode::Char('4'), _) => {
-            app.screen = Screen::Videos;
-            app.list_state.select(Some(0));
-            app.load_screen().await;
-        }
-        (KeyCode::Char('5'), _) => {
             app.screen = Screen::Playlists;
             *app.open_playlist.lock() = None;
             app.list_state.select(Some(0));
             app.load_screen().await;
         }
-        (KeyCode::Char('6'), _) => {
+        (KeyCode::Char('4'), _) => {
             app.screen = Screen::Queue;
             app.list_state.select(Some(0));
         }
-        (KeyCode::Char('7'), _) => {
+        (KeyCode::Char('5'), _) => {
+            app.screen = Screen::Search;
+            app.list_state.select(Some(0));
+            app.search_input_focused = true;
+        }
+        (KeyCode::Char('6'), _) => {
             app.screen = Screen::Devices;
             app.list_state.select(Some(0));
             app.load_screen().await;
         }
-        (KeyCode::Char('8'), _) => {
+        (KeyCode::Char('7'), _) => {
             app.screen = Screen::Settings;
             app.list_state.select(Some(0));
         }
@@ -693,10 +773,24 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.set_status("Refreshed.");
         }
         (KeyCode::Esc, _) => {
-            if app.screen == Screen::Playlists && app.open_playlist.lock().is_some() {
-                *app.open_playlist.lock() = None;
-                app.playlist_items.lock().clear();
-                app.list_state.select(Some(0));
+            // Esc pops the current drill-in (album / series / playlist).
+            match app.screen {
+                Screen::Music if app.open_album.lock().is_some() => {
+                    *app.open_album.lock() = None;
+                    app.album_tracks.lock().clear();
+                    app.list_state.select(Some(0));
+                }
+                Screen::Videos if app.open_series.lock().is_some() => {
+                    *app.open_series.lock() = None;
+                    app.series_children.lock().clear();
+                    app.list_state.select(Some(0));
+                }
+                Screen::Playlists if app.open_playlist.lock().is_some() => {
+                    *app.open_playlist.lock() = None;
+                    app.playlist_items.lock().clear();
+                    app.list_state.select(Some(0));
+                }
+                _ => {}
             }
         }
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
@@ -746,6 +840,8 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         },
         (KeyCode::Char('a'), _) => app.play_selected(PlayMode::Enqueue).await,
         (KeyCode::Char('n'), _) => app.play_selected(PlayMode::PlayNext).await,
+        // `x` — play the highlighted container *right now*, without drilling in.
+        (KeyCode::Char('x'), _) => app.play_selected(PlayMode::PlayContainer).await,
         (KeyCode::Char(' '), _) | (KeyCode::Char('p'), _) => {
             let renderer = app.renderer.lock().clone();
             let state = renderer.state();
@@ -884,8 +980,7 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, app: &mut App) {
         Screen::Devices => draw_devices(f, area, app),
         Screen::Settings => draw_settings(f, area, app),
         Screen::Playlists if app.open_playlist.lock().is_none() => {
-            let title = " ▤ Playlists ";
-            draw_list(f, area, app, title);
+            draw_list(f, area, app, " ▤ Playlists ");
         }
         Screen::Playlists => {
             let name = app
@@ -894,17 +989,54 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, app: &mut App) {
                 .as_ref()
                 .map(|p| p.name.clone())
                 .unwrap_or_default();
-            let title = format!(" ▤ {} — {} tracks ", name, app.playlist_items.lock().len());
+            let title = format!(
+                " ▤ {} — {} tracks   (Esc to go back) ",
+                name,
+                app.playlist_items.lock().len()
+            );
             draw_list_with_title(f, area, app, &title);
         }
-        Screen::Home => draw_list(
-            f,
-            area,
-            app,
-            " ◉ Home — Continue Watching / Recently Added ",
-        ),
-        Screen::Music => draw_list(f, area, app, " ♪ Music — Albums "),
-        Screen::Videos => draw_list(f, area, app, " ▶ Videos — Movies & Series "),
+        Screen::Music if app.open_album.lock().is_none() => {
+            draw_list(f, area, app, " ♪ Music — Albums ")
+        }
+        Screen::Music => {
+            let name = app
+                .open_album
+                .lock()
+                .as_ref()
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
+            let sub = app
+                .open_album
+                .lock()
+                .as_ref()
+                .map(|a| a.subtitle())
+                .unwrap_or_default();
+            let title = format!(
+                " ◈ {}   {}   — {} track(s)   (Esc to go back) ",
+                name,
+                sub,
+                app.album_tracks.lock().len()
+            );
+            draw_list_with_title(f, area, app, &title);
+        }
+        Screen::Videos if app.open_series.lock().is_none() => {
+            draw_list(f, area, app, " ▶ Videos — Movies & Series ")
+        }
+        Screen::Videos => {
+            let name = app
+                .open_series
+                .lock()
+                .as_ref()
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+            let title = format!(
+                " ▶ {} — {} episode(s)   (Esc to go back) ",
+                name,
+                app.series_children.lock().len()
+            );
+            draw_list_with_title(f, area, app, &title);
+        }
         Screen::Queue => draw_list(f, area, app, " ≡ Queue "),
     }
 }
@@ -915,19 +1047,24 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, app: &mut App, title: &str) {
 
 fn draw_list_with_title(f: &mut Frame<'_>, area: Rect, app: &mut App, title: &str) {
     let items_data = app.current_list();
-    let items: Vec<ListItem> = items_data
-        .iter()
-        .enumerate()
-        .map(|(i, it)| ListItem::new(item_row_line(it, Some(i) == app.list_state.selected())))
-        .collect();
-    if items.is_empty() {
-        let block = neon_block(title, true);
-        let inner = block.inner(area);
+    // Compute the column layout ONCE, using the width available inside the
+    // block minus the 3-column highlight symbol (" ▍ "). Every row uses the
+    // same widths so titles / subtitles / times line up as columns.
+    let block = neon_block(title, true);
+    let inner = block.inner(area);
+    let row_width = inner.width.saturating_sub(3); // highlight_symbol reserves 3 cols
+    let layout = RowLayout::compute(row_width);
+
+    if items_data.is_empty() {
         f.render_widget(block, area);
         let msg = match app.screen {
             Screen::Queue => "Queue is empty — press Enter on an item to play, `a` to enqueue.",
-            Screen::Home => "Loading… (press `r` to refresh)",
+            Screen::Music | Screen::Videos => "Loading… (press `r` to refresh)",
             Screen::Playlists => "No playlists yet.",
+            Screen::Search if app.search_query.trim().is_empty() => {
+                "type to search — results update as you type"
+            }
+            Screen::Search => "no matches",
             _ => "Nothing here.",
         };
         f.render_widget(
@@ -937,8 +1074,19 @@ fn draw_list_with_title(f: &mut Frame<'_>, area: Rect, app: &mut App, title: &st
         );
         return;
     }
+    let items: Vec<ListItem> = items_data
+        .iter()
+        .enumerate()
+        .map(|(i, it)| {
+            ListItem::new(item_row_line(
+                it,
+                Some(i) == app.list_state.selected(),
+                layout,
+            ))
+        })
+        .collect();
     let list = List::new(items)
-        .block(neon_block(title, true))
+        .block(block)
         .highlight_style(
             Style::default()
                 .bg(Palette::SURFACE)
@@ -954,43 +1102,52 @@ fn draw_search(f: &mut Frame<'_>, area: Rect, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(3)])
         .split(area);
-    let block = neon_block(" ⌕ Search ", app.search_input_focused);
+    let title = if app.search_input_focused {
+        " ⌕ Search  (typing) "
+    } else {
+        " ⌕ Search  (press / or Tab to type) "
+    };
+    let block = neon_block(title, app.search_input_focused);
     let inner = block.inner(chunks[0]);
     f.render_widget(block, chunks[0]);
-    let indicator = if app.search_input_focused {
-        Span::styled(
-            "▍ ",
+
+    let prompt_style = Style::default()
+        .fg(Palette::PRIMARY)
+        .add_modifier(Modifier::BOLD);
+    let cursor_visible = app.search_input_focused && app.logo_pulse % 2 == 0;
+    let mut spans: Vec<Span> = vec![
+        Span::styled("  ", Style::default()),
+        Span::styled("⌕ ", prompt_style),
+    ];
+    if app.search_query.is_empty() {
+        spans.push(Span::styled(
+            "type to search music, movies, series…",
+            muted_style(),
+        ));
+        if app.search_input_focused {
+            spans.push(Span::styled(
+                if cursor_visible { "  ▏" } else { "   " },
+                Style::default().fg(Palette::PRIMARY),
+            ));
+        }
+    } else {
+        spans.push(Span::styled(
+            app.search_query.clone(),
+            Style::default()
+                .fg(Palette::FG)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            if cursor_visible { "▏" } else { " " },
             Style::default()
                 .fg(Palette::PRIMARY)
                 .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled("  ", Style::default())
-    };
-    let line = Line::from(vec![
-        indicator,
-        Span::styled(
-            if app.search_query.is_empty() {
-                "type to search music, movies, series…".to_string()
-            } else {
-                app.search_query.clone()
-            },
-            if app.search_query.is_empty() {
-                muted_style()
-            } else {
-                Style::default()
-                    .fg(Palette::FG)
-                    .add_modifier(Modifier::BOLD)
-            },
-        ),
-        Span::styled(
-            if app.search_input_focused { "▊" } else { "" },
-            Style::default()
-                .fg(Palette::PRIMARY)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]);
-    f.render_widget(Paragraph::new(line), inner);
+        ));
+    }
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(Palette::SURFACE)),
+        inner,
+    );
     draw_list_with_title(f, chunks[1], app, " ⌕ Results ");
 }
 
@@ -1181,14 +1338,27 @@ fn draw_player_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
     let msg = app.status_message.lock().clone();
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/switch  a: queue  n: next  space: pause  s: stop  </>: skip  +/-: vol  m: mpv  t: next server  /: search  q: quit ";
-    let text = msg.unwrap_or_else(|| help.to_string());
+    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  space: pause  s: stop  </>: skip  +/-: vol  m: mpv  t: server  /: search  esc: back  q: quit ";
+    // Errors/warnings pop in warn-red; other status messages use the primary
+    // teal so they stand out from the muted help text.
+    let (text, style) = match msg {
+        Some(m) if m.contains("failed") || m.contains("error") => (
+            m,
+            Style::default()
+                .fg(Palette::ERROR)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Some(m) => (
+            m,
+            Style::default()
+                .fg(Palette::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        None => (help.to_string(), Style::default().fg(Palette::MUTED)),
+    };
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {} ", text),
-            Style::default().fg(Palette::MUTED),
-        )))
-        .style(Style::default().bg(Palette::SURFACE)),
+        Paragraph::new(Line::from(Span::styled(format!(" {} ", text), style)))
+            .style(Style::default().bg(Palette::SURFACE)),
         area,
     );
 }

@@ -23,6 +23,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
+    // rustls 0.23 requires an explicit CryptoProvider. reqwest picks one via
+    // its own feature flags, but `rust_cast` pulls in rustls without a
+    // provider selection, so we install one process-wide before anything
+    // touches TLS. `install_default` is a no-op if a provider was already
+    // installed by another crate.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // preflight: mpv must be installed no matter what renderer the user picks
     preflight::ensure_mpv()?;
 
@@ -49,9 +56,13 @@ async fn main() -> Result<()> {
 }
 
 fn init_tracing(verbose: u8) {
+    // mdns-sd logs an ERROR line when its ServiceDaemon shuts down
+    // ("failed to send response of shutdown: sending on a closed channel")
+    // during clean process exit. Cosmetic — silence it unless the user
+    // explicitly asked for debug output.
     let level = match verbose {
-        0 => "warn,fin=info",
-        1 => "info,fin=debug",
+        0 => "warn,fin=info,mdns_sd=off",
+        1 => "info,fin=debug,mdns_sd=warn",
         _ => "debug",
     };
     let _ = tracing_subscriber::fmt()

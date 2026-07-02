@@ -455,6 +455,7 @@ dependencies = [
  "fin-player",
  "fin-tui",
  "rpassword",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",

@@ -22,6 +22,7 @@ tracing-subscriber.workspace = true
 directories.workspace = true
 toml.workspace = true
 rpassword.workspace = true
+rustls.workspace = true
 fin-config.workspace = true
 fin-jellyfin.workspace = true
 fin-player.workspace = true

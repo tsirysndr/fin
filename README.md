@@ -1,5 +1,7 @@
 # fin
 
+[![Release](https://github.com/tsirysndr/fin/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/fin/actions/workflows/release.yml)
+
 > a Jellyfin client for the terminal — powered by `mpv` and Chromecast
 
 ![fin — neon-electric Jellyfin TUI](.github/assets/preview.png)

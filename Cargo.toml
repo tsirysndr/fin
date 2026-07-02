@@ -1,0 +1,48 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Tsiry Sandratraina <tsiry.sndr@rocksky.app>"]
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/tsirysndr/fin"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+clap = { version = "4", features = ["derive", "env"] }
+mdns-sd = "0.11"
+rust_cast = "0.20"
+parking_lot = "0.12"
+unicode-width = "0.2"
+percent-encoding = "2"
+whoami = "1"
+rpassword = "7"
+
+fin-config = { path = "crates/fin-config" }
+fin-jellyfin = { path = "crates/fin-jellyfin" }
+fin-player = { path = "crates/fin-player" }
+fin-tui = { path = "crates/fin-tui" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

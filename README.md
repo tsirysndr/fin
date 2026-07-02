@@ -1,4 +1,4 @@
-# fin ⚡
+# fin
 
 > a neon-electric Jellyfin client for the terminal — powered by `mpv` and Chromecast
 

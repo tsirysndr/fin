@@ -1,0 +1,24 @@
+when:
+  - event: ["push", "pull_request"]
+    branch: main
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - cargo
+  - rustc
+  - rustfmt
+  - gcc
+
+steps:
+  - name: nix build
+    command: |
+      nix --extra-experimental-features 'nix-command flakes' build .#default --print-build-logs
+      ls -l result/bin
+  - name: build cli
+    command: |
+      cargo build --release --locked
+      ls -l target/release
+
+

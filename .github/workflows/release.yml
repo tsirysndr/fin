@@ -23,21 +23,19 @@ jobs:
       matrix:
         include:
           - label: macos-amd64
-            os: macos-13
+            os: macos-latest
             target: x86_64-apple-darwin
-            use_cross: false
           - label: macos-aarch64
-            os: macos-14
+            os: macos-latest
             target: aarch64-apple-darwin
-            use_cross: false
           - label: linux-amd64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            use_cross: false
+          # Native ARM Linux runner — no `cross`, no QEMU. Faster and
+          # matches production glibc more closely.
           - label: linux-aarch64
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            use_cross: true
 
     steps:
       - name: Checkout
@@ -53,17 +51,8 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --locked
-
-      - name: Build (cargo)
-        if: ${{ !matrix.use_cross }}
+      - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} --bin fin
-
-      - name: Build (cross)
-        if: matrix.use_cross
-        run: cross build --release --locked --target ${{ matrix.target }} --bin fin
 
       - name: Package tarball
         shell: bash

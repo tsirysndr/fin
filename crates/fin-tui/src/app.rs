@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -99,7 +99,7 @@ pub struct App {
     search_query: String,
     search_input_focused: bool,
     list_state: ListState,
-    status_message: Arc<Mutex<Option<String>>>,
+    status_message: Arc<Mutex<Option<(String, Instant)>>>,
     playback_state: Arc<Mutex<PlaybackState>>,
     should_quit: bool,
     logo_pulse: u8,
@@ -219,7 +219,7 @@ impl App {
     }
 
     fn set_status(&self, msg: impl Into<String>) {
-        *self.status_message.lock() = Some(msg.into());
+        *self.status_message.lock() = Some((msg.into(), Instant::now()));
     }
 
     async fn load_screen(&self) {
@@ -236,10 +236,13 @@ impl App {
                         .await
                     {
                         Ok(v) => {
-                            *status.lock() = Some(format!("♪ {} album(s)", v.len()));
+                            *status.lock() =
+                                Some((format!("♪ {} album(s)", v.len()), Instant::now()));
                             *out.lock() = v;
                         }
-                        Err(e) => *status.lock() = Some(format!("music: {}", e)),
+                        Err(e) => {
+                            *status.lock() = Some((format!("music: {}", e), Instant::now()))
+                        }
                     }
                 });
             }
@@ -253,10 +256,13 @@ impl App {
                         .await
                     {
                         Ok(v) => {
-                            *status.lock() = Some(format!("▶ {} item(s)", v.len()));
+                            *status.lock() =
+                                Some((format!("▶ {} item(s)", v.len()), Instant::now()));
                             *out.lock() = v;
                         }
-                        Err(e) => *status.lock() = Some(format!("videos: {}", e)),
+                        Err(e) => {
+                            *status.lock() = Some((format!("videos: {}", e), Instant::now()))
+                        }
                     }
                 });
             }
@@ -267,7 +273,9 @@ impl App {
                 tokio::spawn(async move {
                     match jf.playlists().await {
                         Ok(v) => *out.lock() = v,
-                        Err(e) => *status.lock() = Some(format!("playlists: {}", e)),
+                        Err(e) => {
+                            *status.lock() = Some((format!("playlists: {}", e), Instant::now()))
+                        }
                     }
                 });
             }
@@ -275,7 +283,10 @@ impl App {
                 let out = self.devices.clone();
                 let status = self.status_message.clone();
                 tokio::spawn(async move {
-                    *status.lock() = Some("Scanning for Chromecasts & UPnP renderers…".into());
+                    *status.lock() = Some((
+                        "Scanning for Chromecasts & UPnP renderers…".into(),
+                        Instant::now(),
+                    ));
                     let (casts, upnps) = tokio::join!(
                         discover_chromecasts(Duration::from_secs(4)),
                         discover_upnp_renderers(Duration::from_secs(4)),
@@ -290,7 +301,8 @@ impl App {
                         Err(e) => tracing::warn!(?e, "upnp scan failed"),
                     }
                     merged.sort_by(|a, b| a.display_name().cmp(&b.display_name()));
-                    *status.lock() = Some(format!("Found {} device(s).", merged.len()));
+                    *status.lock() =
+                        Some((format!("Found {} device(s).", merged.len()), Instant::now()));
                     *out.lock() = merged;
                 });
             }
@@ -310,7 +322,8 @@ impl App {
             return;
         }
         // Immediate feedback while the request is in flight.
-        *self.status_message.lock() = Some(format!("⌕ searching for “{}”…", query));
+        *self.status_message.lock() =
+            Some((format!("⌕ searching for “{}”…", query), Instant::now()));
         let jf = self.jf();
         let out = self.search_results.clone();
         let status = self.status_message.clone();
@@ -340,13 +353,17 @@ impl App {
             {
                 Ok(v) => {
                     if generation.load(Ordering::SeqCst) == gen {
-                        *status.lock() = Some(format!("⌕ {} match(es) for “{}”", v.len(), query));
+                        *status.lock() = Some((
+                            format!("⌕ {} match(es) for “{}”", v.len(), query),
+                            Instant::now(),
+                        ));
                         *out.lock() = v;
                     }
                 }
                 Err(e) => {
                     if generation.load(Ordering::SeqCst) == gen {
-                        *status.lock() = Some(format!("⌕ search failed: {}", e));
+                        *status.lock() =
+                            Some((format!("⌕ search failed: {}", e), Instant::now()));
                         tracing::warn!(query=%query, error=?e, "jellyfin search failed");
                     }
                 }
@@ -511,10 +528,13 @@ impl App {
                 .await
             {
                 Ok(v) => {
-                    *status.lock() = Some(format!("◈ {} — {} track(s)", name, v.len()));
+                    *status.lock() = Some((
+                        format!("◈ {} — {} track(s)", name, v.len()),
+                        Instant::now(),
+                    ));
                     *out.lock() = v;
                 }
-                Err(e) => *status.lock() = Some(format!("album: {}", e)),
+                Err(e) => *status.lock() = Some((format!("album: {}", e), Instant::now())),
             }
         });
         self.list_state.select(Some(0));
@@ -540,10 +560,13 @@ impl App {
                 .await
             {
                 Ok(v) => {
-                    *status.lock() = Some(format!("▶ {} — {} episode(s)", name, v.len()));
+                    *status.lock() = Some((
+                        format!("▶ {} — {} episode(s)", name, v.len()),
+                        Instant::now(),
+                    ));
                     *out.lock() = v;
                 }
-                Err(e) => *status.lock() = Some(format!("series: {}", e)),
+                Err(e) => *status.lock() = Some((format!("series: {}", e), Instant::now())),
             }
         });
         self.list_state.select(Some(0));
@@ -559,10 +582,11 @@ impl App {
         tokio::spawn(async move {
             match jf.playlist_items(&id).await {
                 Ok(v) => {
-                    *status.lock() = Some(format!("Loaded {} items", v.len()));
+                    *status.lock() =
+                        Some((format!("Loaded {} items", v.len()), Instant::now()));
                     *out.lock() = v;
                 }
-                Err(e) => *status.lock() = Some(format!("playlist: {}", e)),
+                Err(e) => *status.lock() = Some((format!("playlist: {}", e), Instant::now())),
             }
         });
         self.list_state.select(Some(0));
@@ -1410,7 +1434,20 @@ fn draw_player_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
-    let msg = app.status_message.lock().clone();
+    // Transient status messages hide the help text; expire them so the help
+    // reappears once the user has had a moment to read the message.
+    const STATUS_TTL: Duration = Duration::from_secs(4);
+    let msg = {
+        let mut guard = app.status_message.lock();
+        match guard.as_ref() {
+            Some((text, set_at)) if set_at.elapsed() < STATUS_TTL => Some(text.clone()),
+            Some(_) => {
+                *guard = None;
+                None
+            }
+            None => None,
+        }
+    };
     let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  space: pause  s: stop  </>: skip  +/-: vol  m: mpv  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.

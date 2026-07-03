@@ -2,14 +2,15 @@
 
 [![Release](https://github.com/tsirysndr/fin/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/fin/actions/workflows/release.yml)
 
-> a Jellyfin client for the terminal — powered by `mpv` and Chromecast
+> a Jellyfin client for the terminal — powered by `mpv`, Chromecast, and UPnP
 
 ![fin — neon-electric Jellyfin TUI](.github/assets/preview.png)
 
 `fin` is a Rust TUI + one-shot CLI that talks to your Jellyfin server, searches
-your library, manages playlists, and pushes streams to either your local **mpv**
-window or any **Chromecast** on your network. Chromecast playback is fully
-queued — enqueue, play-next, skip, resume, all from the terminal.
+your library, manages playlists, and pushes streams to your local **mpv**
+window, any **Chromecast** on your network, or any **UPnP MediaRenderer** (Sonos,
+Kodi, Roon endpoints, Samsung/LG TVs, gmediarender, …). Remote playback is
+fully queued — enqueue, play-next, skip, resume, all from the terminal.
 
 ## Features
 
@@ -20,18 +21,22 @@ queued — enqueue, play-next, skip, resume, all from the terminal.
   plays the whole container in one go.
 - **No list truncation** — Music, Videos, and Playlists fetch every item
   the server has, so nothing stays hidden past an arbitrary limit.
-- **Two renderers**, one interface:
+- **Three renderers**, one interface:
   - `mpv` (local) — spawned automatically and driven via its JSON IPC socket.
   - `chromecast` — device discovery via mDNS, playback through the Default
     Media Receiver, with a **local queue** that auto-advances on `FINISHED`.
+  - `upnp` — SSDP discovery of any UPnP AV MediaRenderer, playback via
+    AVTransport (`SetAVTransportURI` / `Play` / `Pause` / `Stop` / `Seek`)
+    and volume via RenderingControl. Same auto-advancing queue.
 - **Real queue management** — enqueue, play next, jump between tracks, and
-  see the whole queue in its own tab. Works identically for both renderers.
+  see the whole queue in its own tab. Works identically for all renderers.
 - **Playlists** — browse, open, and play the playlists you've saved on the
   server.
 - **Now Playing bar** with title, subtitle, elapsed / total time, a neon
   progress gauge, volume, and the active renderer.
 - **CLI shortcuts** for scripting: `fin play "kind of blue"`,
-  `fin queue --chromecast "Living Room" "wednesday"`, `fin devices`.
+  `fin queue --chromecast "Living Room" "wednesday"`,
+  `fin play --upnp "Kitchen Speaker" "solaris"`, `fin devices`.
 - **All settings** are available as **CLI flags _or_ TOML keys** — one
   workflow scales from ad-hoc invocation to per-machine config.
 - **Pure Rust TLS** (`rustls`) everywhere — no OpenSSL required.
@@ -161,8 +166,9 @@ fin
 fin search "daft punk"
 fin play  "kind of blue"
 fin queue "wednesday season 1"
-fin devices                       # list Chromecasts on your LAN
+fin devices                          # list Chromecasts + UPnP renderers on your LAN
 fin play --chromecast "Living Room" "solaris"
+fin play --upnp       "Kitchen"    "solaris"
 ```
 
 ## Renderer selection

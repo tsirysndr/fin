@@ -61,12 +61,12 @@ Download the `.deb` for your architecture from the
 
 ```bash
 # amd64
-curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.1.0_amd64.deb
-sudo apt install ./fin_0.1.0_amd64.deb
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.2.0_amd64.deb
+sudo apt install ./fin_0.2.0_amd64.deb
 
 # arm64 (Raspberry Pi 4/5, Apple-silicon VM, …)
-curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.1.0_arm64.deb
-sudo apt install ./fin_0.1.0_arm64.deb
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.2.0_arm64.deb
+sudo apt install ./fin_0.2.0_arm64.deb
 ```
 
 `apt` will pull in `mpv` automatically as a dependency.
@@ -83,7 +83,7 @@ sudo apt update && sudo apt install fin
 
 ```bash
 sudo dnf install \
-  https://github.com/tsirysndr/fin/releases/latest/download/fin-0.1.0-1.x86_64.rpm
+  https://github.com/tsirysndr/fin/releases/latest/download/fin-0.2.0-1.x86_64.rpm
 ```
 
 Or via the Gemfury yum repo:
@@ -179,11 +179,12 @@ Three ways to choose a renderer — all equivalent:
 |----------------------------------------|---------------------------|--------------------------------|
 | `--mpv`                                | `--renderer mpv`          | `renderer = "mpv"`             |
 | `--chromecast "Living Room"`           | `--renderer chromecast`   | `renderer = "chromecast"`      |
+| `--upnp "Kitchen Speaker"`             | `--renderer upnp`         | `renderer = "upnp"`            |
 | _(none — falls back to mpv)_           |                           |                                |
 
-When you pass `--chromecast NAME`, the renderer is switched to chromecast
-automatically and that device is preferred on connect. If the name is not
-found on the network, fin picks the first device discovered.
+When you pass `--chromecast NAME` or `--upnp NAME`, the renderer is switched
+to that protocol automatically and the named device is preferred on connect.
+If the name is not found on the network, fin picks the first device discovered.
 
 ## All settings
 
@@ -197,9 +198,10 @@ Every setting exists as both a CLI flag and a TOML key. Flags win.
 | `--user-id ID`        | `FIN_USER_ID`       | `servers[].user_id`       | _(from login)_   |
 | `--user-name NAME`    |                     | `servers[].user_name`     | _(from login)_   |
 | `--device-id ID`      | `FIN_DEVICE_ID`     | `servers[].device_id`     | random UUID      |
-| `--renderer <mpv/chromecast>` | `FIN_RENDERER` | `renderer`           | `mpv`            |
+| `--renderer <mpv/chromecast/upnp>` | `FIN_RENDERER` | `renderer`      | `mpv`            |
 | `--mpv`               |                     | `renderer = "mpv"`        |                  |
 | `--chromecast [NAME]` | `FIN_CHROMECAST`    | `last_chromecast`         |                  |
+| `--upnp [NAME]`       | `FIN_UPNP`          | `last_upnp`               |                  |
 | `-v`, `-vv`           |                     | _(log level)_             | `warn`           |
 
 Find the on-disk config with `fin config --path`; print it with
@@ -242,7 +244,7 @@ fin server rename <a> <b>   # rename
 fin search <query>          # print matches from the active library
 fin play <query>            # search + play the top hit
 fin queue <query>           # search + append to the current queue
-fin devices                 # list Chromecasts on the local network
+fin devices                 # list Chromecasts + UPnP MediaRenderers on the local network
 fin playlists               # list playlists
 fin playlists --list <id>   # dump items of a playlist
 fin config --show|--path    # inspect config
@@ -261,7 +263,7 @@ Tab order — the default screen is **Music**:
 | `/`                          | jump to Search & focus input        |
 | `↑` `↓` / `k` `j`            | move selection                      |
 | `PgUp` / `PgDown`            | jump 10 rows                        |
-| `Enter`                      | **drill in** on a container (album, series, playlist) — plays a leaf (track, episode, movie); on Devices → connect to Chromecast; on Settings → switch server |
+| `Enter`                      | **drill in** on a container (album, series, playlist) — plays a leaf (track, episode, movie); on Devices → connect to the selected Chromecast / UPnP renderer; on Settings → switch server |
 | `x`                          | play the highlighted container as one queue **without** drilling in (album → all tracks, playlist → all items) |
 | `a`                          | enqueue the highlighted item        |
 | `n`                          | play the highlighted item **next**  |
@@ -276,17 +278,21 @@ Tab order — the default screen is **Music**:
 | `Esc`                        | leave the search input / close open playlist |
 | `q` / `Ctrl-C`               | quit                                |
 
-## Chromecast queue
+## Remote-renderer queue
 
-For Chromecasts, `fin` maintains the queue **on the client**, tracks the
-device's media session, and loads the next item automatically the moment
-the current one reports `IDLE / FINISHED`. That means:
+For both Chromecast and UPnP, `fin` maintains the queue **on the client**,
+polls the device for its current transport state, and loads the next item
+automatically the moment the current one finishes (Chromecast:
+`IDLE / FINISHED`; UPnP: `STOPPED` after having been `PLAYING`). That means:
 
 - `a` (queue) and `n` (play-next) do the right thing while something is
-  already casting.
+  already streaming.
 - Skipping (`>` / `<`) triggers a `load` for the next queue item
   immediately — no waiting for the current one to finish.
-- Stopping clears the local queue and stops the receiver's media session.
+- Stopping clears the local queue and stops the receiver's playback.
+
+UPnP renderers without a `RenderingControl` service (rare, but it happens)
+still work for transport — volume changes are just no-ops on the device.
 
 ## Streams & transcoding
 
@@ -296,6 +302,9 @@ the current one reports `IDLE / FINISHED`. That means:
 - **Chromecast** playback defaults to Jellyfin's HLS output (`main.m3u8`),
   because the Default Media Receiver's codec matrix is much narrower than
   mpv's. This means Jellyfin will transcode when it needs to.
+- **UPnP** playback uses the direct stream by default — most UPnP
+  MediaRenderers speak MP3 / AAC / FLAC natively and the direct path avoids
+  the transcode. Fall back to HLS with `--hls` if your renderer needs it.
 - Force one or the other from the CLI with `--hls` on `play`/`queue`.
 
 ## Development
@@ -314,7 +323,7 @@ fin/
 │   ├── fin/               # binary — clap CLI + startup
 │   ├── fin-config/        # TOML config file & credentials
 │   ├── fin-jellyfin/      # Jellyfin HTTP API client
-│   ├── fin-player/        # Renderer trait + mpv + Chromecast + queue
+│   ├── fin-player/        # Renderer trait + mpv + Chromecast + UPnP + queue
 │   └── fin-tui/           # Ratatui neon TUI
 └── Cargo.toml             # workspace + shared deps (rustls only, no openssl)
 ```

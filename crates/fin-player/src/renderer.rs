@@ -43,6 +43,7 @@ impl Default for PlaybackState {
 pub enum RendererKind {
     Mpv,
     Chromecast,
+    Upnp,
 }
 
 impl RendererKind {
@@ -50,6 +51,7 @@ impl RendererKind {
         match self {
             Self::Mpv => "mpv",
             Self::Chromecast => "chromecast",
+            Self::Upnp => "upnp",
         }
     }
 }

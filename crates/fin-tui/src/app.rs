@@ -22,9 +22,52 @@ use tracing::warn;
 use fin_config::{Config, RendererPref};
 use fin_jellyfin::{BaseItem, ItemKind, JellyfinClient, StreamFormat};
 use fin_player::{
-    discover_chromecasts, CastDevice, ChromecastRenderer, MpvRenderer, PlaybackState, QueueItem,
-    Renderer, RendererKind,
+    discover_chromecasts, discover_upnp_renderers, CastDevice, ChromecastRenderer, MpvRenderer,
+    PlaybackState, QueueItem, Renderer, RendererKind, UpnpDevice, UpnpRenderer,
 };
+
+/// A single row in the Devices screen. Both Chromecast and UPnP renderers
+/// share the same list so the user picks by name rather than by protocol.
+#[derive(Debug, Clone)]
+pub enum RemoteDevice {
+    Cast(CastDevice),
+    Upnp(UpnpDevice),
+}
+
+impl RemoteDevice {
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::Cast(d) => d.display_name(),
+            Self::Upnp(d) => d.display_name(),
+        }
+    }
+
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Cast(_) => "chromecast",
+            Self::Upnp(_) => "upnp",
+        }
+    }
+
+    pub fn subtitle(&self) -> String {
+        match self {
+            Self::Cast(d) => format!("{}   {}:{}", d.model, d.address, d.port),
+            Self::Upnp(d) => {
+                let model = if d.model.is_empty() {
+                    "-".to_string()
+                } else {
+                    d.model.clone()
+                };
+                let manuf = if d.manufacturer.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}   ", d.manufacturer)
+                };
+                format!("{manuf}{model}   {}", d.address)
+            }
+        }
+    }
+}
 
 use crate::event::{spawn_event_loop, AppEvent};
 use crate::screens::{item_row_line, RowLayout, Screen};
@@ -50,7 +93,7 @@ pub struct App {
     series_children: Arc<Mutex<Vec<BaseItem>>>,
     open_series: Arc<Mutex<Option<BaseItem>>>,
     search_results: Arc<Mutex<Vec<BaseItem>>>,
-    devices: Arc<Mutex<Vec<CastDevice>>>,
+    devices: Arc<Mutex<Vec<RemoteDevice>>>,
     search_generation: Arc<AtomicU64>,
     // ephemeral
     search_query: String,
@@ -68,6 +111,7 @@ impl App {
         let label = match kind {
             RendererKind::Mpv => "this machine".into(),
             RendererKind::Chromecast => "Chromecast".into(),
+            RendererKind::Upnp => "UPnP".into(),
         };
         let mut list_state = ListState::default();
         list_state.select(Some(0));
@@ -231,14 +275,23 @@ impl App {
                 let out = self.devices.clone();
                 let status = self.status_message.clone();
                 tokio::spawn(async move {
-                    *status.lock() = Some("Scanning for Chromecasts…".into());
-                    match discover_chromecasts(Duration::from_secs(4)).await {
-                        Ok(v) => {
-                            *status.lock() = Some(format!("Found {} device(s).", v.len()));
-                            *out.lock() = v;
-                        }
-                        Err(e) => *status.lock() = Some(format!("scan: {}", e)),
+                    *status.lock() = Some("Scanning for Chromecasts & UPnP renderers…".into());
+                    let (casts, upnps) = tokio::join!(
+                        discover_chromecasts(Duration::from_secs(4)),
+                        discover_upnp_renderers(Duration::from_secs(4)),
+                    );
+                    let mut merged: Vec<RemoteDevice> = Vec::new();
+                    match casts {
+                        Ok(v) => merged.extend(v.into_iter().map(RemoteDevice::Cast)),
+                        Err(e) => tracing::warn!(?e, "chromecast scan failed"),
                     }
+                    match upnps {
+                        Ok(v) => merged.extend(v.into_iter().map(RemoteDevice::Upnp)),
+                        Err(e) => tracing::warn!(?e, "upnp scan failed"),
+                    }
+                    merged.sort_by(|a, b| a.display_name().cmp(&b.display_name()));
+                    *status.lock() = Some(format!("Found {} device(s).", merged.len()));
+                    *out.lock() = merged;
                 });
             }
             _ => {}
@@ -524,20 +577,33 @@ impl App {
         else {
             return Err(anyhow!("no device selected"));
         };
-        self.set_status(format!("Connecting to {}…", sel.display_name()));
-        let renderer = ChromecastRenderer::connect(sel.clone()).await?;
-        let arc: Arc<dyn Renderer> = Arc::new(renderer);
-        *self.renderer.lock() = arc;
-        *self.renderer_kind.lock() = RendererKind::Chromecast;
-        *self.renderer_label.lock() = sel.display_name();
-        // persist preference
-        {
-            let mut cfg = self.config.lock();
-            cfg.renderer = RendererPref::Chromecast;
-            cfg.last_chromecast = Some(sel.display_name());
-            let _ = cfg.save();
+        let name = sel.display_name();
+        self.set_status(format!("Connecting to {}…", name));
+        match sel {
+            RemoteDevice::Cast(dev) => {
+                let renderer = ChromecastRenderer::connect(dev).await?;
+                let arc: Arc<dyn Renderer> = Arc::new(renderer);
+                *self.renderer.lock() = arc;
+                *self.renderer_kind.lock() = RendererKind::Chromecast;
+                *self.renderer_label.lock() = name.clone();
+                let mut cfg = self.config.lock();
+                cfg.renderer = RendererPref::Chromecast;
+                cfg.last_chromecast = Some(name.clone());
+                let _ = cfg.save();
+            }
+            RemoteDevice::Upnp(dev) => {
+                let renderer = UpnpRenderer::connect(dev).await?;
+                let arc: Arc<dyn Renderer> = Arc::new(renderer);
+                *self.renderer.lock() = arc;
+                *self.renderer_kind.lock() = RendererKind::Upnp;
+                *self.renderer_label.lock() = name.clone();
+                let mut cfg = self.config.lock();
+                cfg.renderer = RendererPref::Upnp;
+                cfg.last_upnp = Some(name.clone());
+                let _ = cfg.save();
+            }
         }
-        self.set_status(format!("Streaming to {}.", sel.display_name()));
+        self.set_status(format!("Streaming to {}.", name));
         Ok(())
     }
 
@@ -1164,9 +1230,13 @@ fn draw_devices(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             } else {
                 Palette::ACCENT
             };
+            let icon = match d {
+                RemoteDevice::Cast(_) => " 󰓐 ",
+                RemoteDevice::Upnp(_) => " ◈ ",
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    " 󰓐 ",
+                    icon,
                     Style::default().fg(icon_col).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -1176,17 +1246,14 @@ fn draw_devices(f: &mut Frame<'_>, area: Rect, app: &mut App) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("   {}  ", d.model),
-                    Style::default().fg(Palette::MUTED),
+                    format!("   [{}]  ", d.kind_label()),
+                    Style::default().fg(Palette::HIGHLIGHT),
                 ),
-                Span::styled(
-                    format!("{}:{}", d.address, d.port),
-                    Style::default().fg(Palette::SKY),
-                ),
+                Span::styled(d.subtitle(), Style::default().fg(Palette::SKY)),
             ]))
         })
         .collect();
-    let title = " ◈ Chromecast Devices  (Enter to select, r to rescan) ";
+    let title = " ◈ Renderers  (Chromecast + UPnP — Enter to select, r to rescan) ";
     if items.is_empty() {
         let block = neon_block(title, true);
         let inner = block.inner(area);
@@ -1220,13 +1287,14 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
         .last_chromecast
         .clone()
         .unwrap_or_else(|| "—".into());
+    let last_upnp = cfg_snapshot.last_upnp.clone().unwrap_or_else(|| "—".into());
     let path = fin_config::config_path()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(4)])
+        .constraints([Constraint::Length(7), Constraint::Min(4)])
         .split(area);
 
     // Top card — global settings.
@@ -1235,13 +1303,17 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             Span::styled("  Renderer      ", title_style()),
             Span::styled(renderer_pref, accent_style()),
             Span::styled(
-                "   (press m for mpv, 7 → Enter for a chromecast)",
+                "   (press m for mpv, 6 → Enter for a chromecast / UPnP renderer)",
                 muted_style(),
             ),
         ]),
         Line::from(vec![
             Span::styled("  Last Cast     ", title_style()),
             Span::styled(last_cast, Style::default().fg(Palette::HIGHLIGHT)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Last UPnP     ", title_style()),
+            Span::styled(last_upnp, Style::default().fg(Palette::HIGHLIGHT)),
         ]),
         Line::from(vec![
             Span::styled("  Config File   ", title_style()),

@@ -83,6 +83,7 @@ impl<'a> Widget for PlayerBar<'a> {
         let renderer_icon = match self.renderer {
             RendererKind::Mpv => "󰐋 mpv",
             RendererKind::Chromecast => "󰓐 chromecast",
+            RendererKind::Upnp => "◈ upnp",
         };
         let (title_text, subtitle_text) = match &self.state.now_playing {
             Some(item) => (item.title.clone(), item.subtitle.clone()),

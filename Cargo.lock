@@ -503,12 +503,14 @@ dependencies = [
  "futures",
  "mdns-sd",
  "parking_lot",
+ "reqwest",
  "rust_cast",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 

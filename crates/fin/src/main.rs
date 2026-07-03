@@ -10,8 +10,8 @@ use clap::Parser;
 use fin_config::{derive_server_name, Config, RendererPref, ServerConfig};
 use fin_jellyfin::{ItemKind, JellyfinClient, StreamFormat};
 use fin_player::{
-    discover_chromecasts, CastDevice, ChromecastRenderer, MpvRenderer, QueueItem, Renderer,
-    RendererKind,
+    discover_chromecasts, discover_upnp_renderers, CastDevice, ChromecastRenderer, MpvRenderer,
+    QueueItem, Renderer, RendererKind, UpnpDevice, UpnpRenderer,
 };
 use fin_tui::{run_tui, App};
 use tracing_subscriber::EnvFilter;
@@ -150,6 +150,11 @@ fn load_and_merge(cli: &Cli) -> Result<Config> {
         if !name.is_empty() {
             cfg.last_chromecast = Some(name.clone());
         }
+    } else if let Some(name) = &cli.upnp {
+        cfg.renderer = RendererPref::Upnp;
+        if !name.is_empty() {
+            cfg.last_upnp = Some(name.clone());
+        }
     } else if let Some(r) = cli.renderer {
         cfg.renderer = r.into();
     }
@@ -181,12 +186,34 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
             let r = ChromecastRenderer::connect(target).await?;
             Ok((Arc::new(r), name))
         }
+        RendererPref::Upnp => {
+            let devices = discover_upnp_renderers(Duration::from_secs(3)).await?;
+            let target = pick_upnp(&devices, cfg.last_upnp.as_deref())?;
+            let name = target.display_name();
+            let r = UpnpRenderer::connect(target).await?;
+            Ok((Arc::new(r), name))
+        }
     }
 }
 
 fn pick_chromecast(devices: &[CastDevice], preferred: Option<&str>) -> Result<CastDevice> {
     if devices.is_empty() {
         anyhow::bail!("no Chromecasts found on the local network");
+    }
+    if let Some(name) = preferred {
+        if let Some(d) = devices
+            .iter()
+            .find(|d| d.display_name().eq_ignore_ascii_case(name))
+        {
+            return Ok(d.clone());
+        }
+    }
+    Ok(devices[0].clone())
+}
+
+fn pick_upnp(devices: &[UpnpDevice], preferred: Option<&str>) -> Result<UpnpDevice> {
+    if devices.is_empty() {
+        anyhow::bail!("no UPnP MediaRenderers found on the local network");
     }
     if let Some(name) = preferred {
         if let Some(d) = devices
@@ -400,8 +427,13 @@ async fn cmd_play(cfg: &Config, args: PlayArgs, queue: bool) -> Result<()> {
             label
         );
     }
-    // For chromecast, keep the process alive so playback keeps flowing.
-    if renderer.kind() == RendererKind::Chromecast {
+    // For remote renderers (Chromecast, UPnP) the actual playback happens
+    // off-box — we need to keep the process alive so the control task can
+    // keep polling status and honour queue advances.
+    if matches!(
+        renderer.kind(),
+        RendererKind::Chromecast | RendererKind::Upnp
+    ) {
         println!("Ctrl+C to disconnect.");
         tokio::signal::ctrl_c().await?;
     }
@@ -409,19 +441,54 @@ async fn cmd_play(cfg: &Config, args: PlayArgs, queue: bool) -> Result<()> {
 }
 
 async fn cmd_devices(scan_seconds: u64) -> Result<()> {
-    println!("scanning for Chromecasts ({}s)…", scan_seconds);
-    let devices = discover_chromecasts(Duration::from_secs(scan_seconds)).await?;
-    if devices.is_empty() {
+    println!(
+        "scanning for Chromecasts (mDNS) and UPnP MediaRenderers (SSDP) — {}s…",
+        scan_seconds
+    );
+    // Run mDNS + SSDP concurrently — the scan window is the same for both,
+    // so we don't want to pay for it twice.
+    let cast_fut = discover_chromecasts(Duration::from_secs(scan_seconds));
+    let upnp_fut = discover_upnp_renderers(Duration::from_secs(scan_seconds));
+    let (cast_res, upnp_res) = tokio::join!(cast_fut, upnp_fut);
+
+    let casts = cast_res.unwrap_or_else(|e| {
+        eprintln!("mDNS scan failed: {}", e);
+        Vec::new()
+    });
+    let upnps = upnp_res.unwrap_or_else(|e| {
+        eprintln!("SSDP scan failed: {}", e);
+        Vec::new()
+    });
+
+    if casts.is_empty() && upnps.is_empty() {
         eprintln!("no devices found");
         return Ok(());
     }
-    for d in devices {
+    for d in casts {
         println!(
-            "󰓐 {}   [{}]   {}:{}",
+            "󰓐 chromecast  {}   [{}]   {}:{}",
             d.display_name(),
             d.model,
             d.address,
             d.port
+        );
+    }
+    for d in upnps {
+        let manuf = if d.manufacturer.is_empty() {
+            String::new()
+        } else {
+            format!("[{}] ", d.manufacturer)
+        };
+        println!(
+            "◈ upnp       {}   {}{}   {}",
+            d.display_name(),
+            manuf,
+            if d.model.is_empty() {
+                "-".into()
+            } else {
+                format!("({})", d.model)
+            },
+            d.address,
         );
     }
     Ok(())

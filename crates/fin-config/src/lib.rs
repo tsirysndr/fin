@@ -23,6 +23,8 @@ pub struct Config {
     #[serde(default)]
     pub last_chromecast: Option<String>,
     #[serde(default)]
+    pub last_upnp: Option<String>,
+    #[serde(default)]
     pub client: ClientInfo,
 }
 
@@ -87,6 +89,7 @@ pub enum RendererPref {
     #[default]
     Mpv,
     Chromecast,
+    Upnp,
 }
 
 impl RendererPref {
@@ -94,6 +97,7 @@ impl RendererPref {
         match self {
             Self::Mpv => "mpv",
             Self::Chromecast => "chromecast",
+            Self::Upnp => "upnp",
         }
     }
 }

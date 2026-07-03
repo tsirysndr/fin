@@ -32,6 +32,7 @@ pub fn neon_styles() -> Styles {
 pub enum RendererArg {
     Mpv,
     Chromecast,
+    Upnp,
 }
 
 impl From<RendererArg> for RendererPref {
@@ -39,6 +40,7 @@ impl From<RendererArg> for RendererPref {
         match a {
             RendererArg::Mpv => RendererPref::Mpv,
             RendererArg::Chromecast => RendererPref::Chromecast,
+            RendererArg::Upnp => RendererPref::Upnp,
         }
     }
 }
@@ -94,13 +96,18 @@ pub struct Cli {
     pub renderer: Option<RendererArg>,
 
     /// Force the local mpv renderer.
-    #[arg(long, global = true, conflicts_with_all = ["chromecast", "renderer"])]
+    #[arg(long, global = true, conflicts_with_all = ["chromecast", "upnp", "renderer"])]
     pub mpv: bool,
 
     /// Cast to a Chromecast by display name. Implies `--renderer chromecast`.
     /// Pass an empty string to auto-pick the first device found.
     #[arg(long, global = true, env = "FIN_CHROMECAST", num_args = 0..=1, default_missing_value = "")]
     pub chromecast: Option<String>,
+
+    /// Stream to a UPnP MediaRenderer by friendly name. Implies `--renderer upnp`.
+    /// Pass an empty string to auto-pick the first device found.
+    #[arg(long, global = true, env = "FIN_UPNP", num_args = 0..=1, default_missing_value = "", conflicts_with = "chromecast")]
+    pub upnp: Option<String>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -156,9 +163,9 @@ pub enum Command {
     /// Search + append to the current renderer queue.
     Queue(PlayArgs),
 
-    /// List Chromecasts on the local network.
+    /// List Chromecasts and UPnP MediaRenderers on the local network.
     Devices {
-        /// mDNS scan duration in seconds.
+        /// Discovery scan duration in seconds (mDNS + SSDP run concurrently).
         #[arg(long, default_value_t = 4)]
         scan_seconds: u64,
     },

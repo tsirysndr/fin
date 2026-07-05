@@ -26,6 +26,9 @@ use symphonia::core::probe::Hint;
 use symphonia::core::units::{Time, TimeBase};
 use tracing::{debug, error, warn};
 
+use fin_config::EqBand;
+use rockbox_dsp::{eq_band_setting, Dsp, EQ_NUM_BANDS};
+
 use crate::crossfade::{fade_at, CrossfadeMode, CrossfadeSettings};
 use crate::persist::{PersistedQueue, Persister};
 use crate::queue::{PlaybackQueue, QueueItem};
@@ -68,6 +71,10 @@ enum PlayerCommand {
     RemoveAt(usize),
     SetReplayGain(ReplayGainSettings),
     SetCrossfade(CrossfadeSettings),
+    SetEq {
+        enabled: bool,
+        bands: Vec<EqBand>,
+    },
     Quit,
 }
 
@@ -190,6 +197,10 @@ impl Renderer for SymphoniaPlayer {
 
     async fn set_crossfade(&self, settings: CrossfadeSettings) -> Result<()> {
         self.send(PlayerCommand::SetCrossfade(settings))
+    }
+
+    async fn set_eq(&self, enabled: bool, bands: Vec<EqBand>) -> Result<()> {
+        self.send(PlayerCommand::SetEq { enabled, bands })
     }
 
     fn state(&self) -> PlaybackState {
@@ -610,6 +621,14 @@ fn run_worker(
     // Current ReplayGain settings — applied to each track we load.
     let mut rg_settings = ReplayGainSettings::default();
     let mut xf_settings = CrossfadeSettings::default();
+    // Rockbox DSP pipeline for the CURRENT track only. Initialised lazily
+    // on the first track load (we need the device output rate). The
+    // instance is a process-wide singleton (`CODEC_IDX_AUDIO`), so we
+    // never own two at once — the crossfade `next` track bypasses it and
+    // uses the plain resampler.
+    let mut dsp: Option<Dsp> = None;
+    let mut eq_enabled = false;
+    let mut eq_bands: Vec<EqBand> = Vec::new();
     // The "incoming" track being preloaded during a crossfade overlap.
     // `Some` only during an active overlap. When the fade-in completes,
     // this promotes to `track` and the previous `track` is dropped.
@@ -955,6 +974,18 @@ fn run_worker(
                     state.lock().replaygain = settings;
                     persist_now(&persister, &queue, &state);
                 }
+                PlayerCommand::SetEq { enabled, bands } => {
+                    eq_enabled = enabled;
+                    eq_bands = bands;
+                    if let Some(ref mut d) = dsp {
+                        apply_eq_to_dsp(d, eq_enabled, &eq_bands);
+                    }
+                    {
+                        let mut s = state.lock();
+                        s.eq_enabled = eq_enabled;
+                        s.eq_band_count = eq_bands.len().min(EQ_NUM_BANDS);
+                    }
+                }
                 PlayerCommand::SetCrossfade(settings) => {
                     xf_settings = settings;
                     // If the mode was turned OFF mid-overlap, kill the
@@ -1021,9 +1052,25 @@ fn run_worker(
                 continue;
             }
 
+            // Lazy-init the Dsp singleton on the first track load — we need
+            // the device output rate, which comes from the track itself.
+            if dsp.is_none() {
+                let mut d = Dsp::new(t.output_sr);
+                // My Resampler already delivers samples at the device rate,
+                // so keep Dsp's input rate = output rate — no internal
+                // resample, just the EQ / tone stack.
+                d.set_input_frequency(t.output_sr);
+                apply_eq_to_dsp(&mut d, eq_enabled, &eq_bands);
+                dsp = Some(d);
+            }
+
             let free = t.ring_free_slots();
             if free >= 8192 && !t.ended {
-                match decode_one_packet(t) {
+                // EQ only routes for the CURRENT track — the singleton
+                // constraint means we can't run two tracks through Dsp
+                // at once. `next` (during crossfade) bypasses.
+                let dsp_arg = if eq_enabled { dsp.as_mut() } else { None };
+                match decode_one_packet(t, dsp_arg) {
                     DecodeStep::Pushed => update_position(&state, t),
                     DecodeStep::EndOfStream => {
                         debug!(item = %t.item.title, "current track ended");
@@ -1042,7 +1089,7 @@ fn run_worker(
         if let Some(ref mut nt) = next {
             let free = nt.ring_free_slots();
             if free >= 8192 && !nt.ended {
-                match decode_one_packet(nt) {
+                match decode_one_packet(nt, None) {
                     DecodeStep::Pushed => {}
                     DecodeStep::EndOfStream => nt.ended = true,
                     DecodeStep::Error(e) => {
@@ -1194,7 +1241,7 @@ enum DecodeStep {
     Error(String),
 }
 
-fn decode_one_packet(t: &mut Track) -> DecodeStep {
+fn decode_one_packet(t: &mut Track, dsp: Option<&mut Dsp>) -> DecodeStep {
     let packet = match t.format.next_packet() {
         Ok(p) => p,
         Err(symphonia::core::errors::Error::IoError(e))
@@ -1223,15 +1270,58 @@ fn decode_one_packet(t: &mut Track) -> DecodeStep {
     sample_buf.copy_interleaved_ref(audio_buf);
     let src_samples = sample_buf.samples();
     // Convert channels + sample rate to what cpal is actually consuming.
-    let out_samples = t.resampler.process(src_samples);
+    let mut out_samples = t.resampler.process(src_samples);
     if out_samples.is_empty() {
         return DecodeStep::Pushed;
+    }
+    // Rockbox EQ post-processing — Dsp only handles interleaved stereo, so
+    // for non-stereo output we skip and let the samples through untouched.
+    if let Some(d) = dsp {
+        if t.output_channels == 2 {
+            out_samples = apply_dsp(d, &out_samples);
+            if out_samples.is_empty() {
+                return DecodeStep::Pushed;
+            }
+        }
     }
     let out_frames = out_samples.len() / t.output_channels.max(1);
     push_samples_with_volume(t, &out_samples);
     t.produced_output_frames += out_frames as u64;
     DecodeStep::Pushed
 }
+
+/// Route interleaved-stereo f32 samples through the Rockbox DSP pipeline
+/// with input rate == output rate (no internal resample; my Resampler
+/// already ran). Loudness scales aside, this is just the EQ + tone stack.
+fn apply_dsp(dsp: &mut Dsp, samples: &[f32]) -> Vec<f32> {
+    // f32 → i16, saturating.
+    let mut input = Vec::with_capacity(samples.len());
+    for &s in samples {
+        let v = (s * 32767.0).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        input.push(v);
+    }
+    let mut out_i16: Vec<i16> = Vec::with_capacity(input.len());
+    dsp.process(&input, &mut out_i16);
+    // i16 → f32.
+    out_i16.iter().map(|&s| s as f32 / 32768.0).collect()
+}
+
+/// Apply an on/off toggle plus the current bands to the Dsp singleton.
+/// Truncates to EQ_NUM_BANDS silently.
+fn apply_eq_to_dsp(dsp: &mut Dsp, enabled: bool, bands: &[EqBand]) {
+    for (i, band) in bands.iter().take(EQ_NUM_BANDS).enumerate() {
+        dsp.set_eq_band_raw(
+            i,
+            eq_band_setting {
+                cutoff: band.cutoff,
+                q: band.q,
+                gain: band.gain,
+            },
+        );
+    }
+    dsp.eq_enable(enabled);
+}
+
 
 fn push_samples_with_volume(t: &Track, samples: &[f32]) {
     // Effective scale = user volume × ReplayGain linear multiplier ×

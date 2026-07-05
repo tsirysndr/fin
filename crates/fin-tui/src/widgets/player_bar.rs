@@ -153,11 +153,22 @@ impl<'a> Widget for PlayerBar<'a> {
         } else {
             Span::raw("")
         };
+        let eq_span = if self.state.eq_enabled {
+            Span::styled(
+                "EQ ",
+                Style::default()
+                    .fg(Palette::HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw("")
+        };
         let right_line = Line::from(vec![
             shuffle_span,
             repeat_span,
             rg_span,
             xf_span,
+            eq_span,
             Span::styled(
                 format!("♪ {}%   ", (self.state.volume * 100.0) as i32),
                 Style::default().fg(Palette::HIGHLIGHT),

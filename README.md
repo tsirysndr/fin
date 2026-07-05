@@ -36,6 +36,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
   - [Repeat](#repeat)
   - [ReplayGain](#replaygain)
   - [Crossfade](#crossfade)
+  - [Equalizer](#equalizer)
 - [Queue persistence](#queue-persistence)
 - [Remote-renderer queue](#remote-renderer-queue)
 - [Streams & transcoding](#streams--transcoding)
@@ -63,8 +64,9 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
     AVTransport (`SetAVTransportURI` / `Play` / `Pause` / `Stop` / `Seek`)
     and volume via RenderingControl. Same auto-advancing queue.
 - **Playback modes** — shuffle, repeat-off/all/one, [ReplayGain](#replaygain)
-  (track / album), and [crossfade](#crossfade) between adjacent tracks
-  (traditional cosine curves *or* additive DJ-mixed).
+  (track / album), [crossfade](#crossfade) between adjacent tracks
+  (traditional cosine curves *or* additive DJ-mixed), and a
+  10-band [equalizer](#equalizer) powered by the Rockbox DSP pipeline.
 - **Queue persistence** — the audio queue, shuffle/repeat state, and the exact
   playhead within the current track survive restarts. Restore lands paused;
   `Space` picks up where you left off.
@@ -258,13 +260,15 @@ Every setting exists as both a CLI flag and a TOML key. Flags win.
 Audio-side playback settings live under TOML sub-tables and are toggled from
 the TUI (see [Playback modes & effects](#playback-modes--effects)):
 
-| TOML                              | Default | Notes                                  |
-|-----------------------------------|---------|----------------------------------------|
-| `replaygain.mode`                 | `off`   | `off` / `track` / `album`              |
-| `replaygain.preamp_db`            | `0.0`   | additive in dB before clip guard       |
-| `replaygain.prevent_clip`         | `true`  | caps gain so `linear * peak <= 1.0`    |
-| `crossfade.mode`                  | `off`   | `off` / `crossfade` / `mixed`          |
-| `crossfade.duration_secs`         | `5.0`   | overlap window in seconds              |
+| TOML                              | Default        | Notes                                                    |
+|-----------------------------------|----------------|----------------------------------------------------------|
+| `replaygain.mode`                 | `off`          | `off` / `track` / `album`                                |
+| `replaygain.preamp_db`            | `0.0`          | additive in dB before clip guard                         |
+| `replaygain.prevent_clip`         | `true`         | caps gain so `linear * peak <= 1.0`                      |
+| `crossfade.mode`                  | `off`          | `off` / `crossfade` / `mixed`                            |
+| `crossfade.duration_secs`         | `5.0`          | overlap window in seconds                                |
+| `eq_enabled`                      | `false`        | toggle the Rockbox 10-band EQ pipeline                   |
+| `[[eq_band_settings]]`            | ISO octave     | 10 bands (see [Equalizer](#equalizer)); Rockbox-compatible |
 
 Find the on-disk config with `fin config --path`; print it with
 `fin config --show`.
@@ -333,6 +337,9 @@ Tab order — the default screen is **Music**:
 | `Shift+R`                    | cycle repeat mode (off → all → one) |
 | `g`                          | cycle ReplayGain (off → track → album) |
 | `f` / `Shift+F`              | cycle crossfade mode / cycle crossfade duration (3, 5, 8, 12 s) |
+| `Shift+E`                    | toggle 10-band Rockbox EQ           |
+| `[` / `]`                    | (Settings) select previous / next EQ band |
+| `Shift+↑` / `Shift+↓`        | (Settings) nudge the selected EQ band's gain by ±1 dB |
 | `Space` or `p`               | pause / resume                      |
 | `s`                          | stop                                |
 | `<` / `>` or `h` / `l`       | previous / next track               |
@@ -389,6 +396,42 @@ Under the hood, `fin` runs a second decoder + cpal output stream during the
 overlap and the OS mixer sums them. The overlap kicks in both on natural
 end-of-track transitions AND when you Play a new album or jump to a new
 queue entry — so switching tracks manually still fades cleanly.
+
+### Equalizer
+
+`fin` links the Rockbox DSP pipeline
+([`rockbox-dsp`](https://crates.io/crates/rockbox-dsp)) for a fixed-point
+10-band EQ with high-quality biquad filters — band 0 is a low shelf, band 9
+a high shelf, bands 1–8 are peaking filters. On the Settings screen you'll
+see 10 vertical sliders with `dB` labels above and cutoff frequency labels
+below. The controls:
+
+| Key            | Action                                        |
+|----------------|-----------------------------------------------|
+| `E`            | toggle EQ on / off                            |
+| `[` / `]`      | move the highlighted band left / right        |
+| `Shift+↑` / `↓`| bump the highlighted band's gain by ±1 dB     |
+
+Adjustments persist to `config.toml` immediately. Fresh installs get the
+ISO-octave flat preset (32 Hz, 63, 125, 250, 500, 1 kHz, 2, 4, 8, 16 kHz,
+Q 7.0, 0 dB across the board) so the DSP is a bit-exact bypass until you
+start tweaking. Values in `[[eq_band_settings]]` use Rockbox tenths — `q =
+70` means Q 7.0, `gain = -125` means −12.5 dB — so a Rockbox preset drops
+in unchanged.
+
+**License note:** enabling EQ links the Rockbox DSP C sources (GPL-2.0-or-later),
+which makes the resulting `fin` binary GPL. The rest of `fin` remains MPL-2.0
+in source form.
+
+Two behavioral notes:
+
+- **EQ only applies to the currently-playing track**, not to the crossfade
+  incoming track. The Rockbox DSP is a process-wide singleton (`CODEC_IDX_AUDIO`),
+  so it can only process one stream at a time. During a crossfade the outgoing
+  track is EQ'd; the incoming track becomes EQ'd only after it's promoted to
+  current.
+- **Only local playback runs through EQ.** Chromecast and UPnP receivers each
+  do their own DSP; the toggle is a no-op there.
 
 ## Queue persistence
 

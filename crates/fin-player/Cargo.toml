@@ -33,3 +33,8 @@ rb = "0.4"
 # Shuffle uses Fisher-Yates via `rand` — pulled in as a transitive dep
 # already, so this is a zero-cost explicit dep.
 rand = "0.9"
+
+# Rockbox DSP pipeline — 10-band EQ, tone controls, resample, crossfeed, …
+# Note: the compiled C sources are GPL-2.0-or-later — linking makes the
+# binary GPL when EQ code is included.
+rockbox-dsp = "0.1"

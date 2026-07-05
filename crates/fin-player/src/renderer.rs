@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use fin_config::EqBand;
+
 use crate::crossfade::CrossfadeSettings;
 use crate::persist::PersistedQueue;
 use crate::queue::{QueueItem, RepeatMode};
@@ -36,6 +38,12 @@ pub struct PlaybackState {
     pub replaygain: ReplayGainSettings,
     #[serde(default)]
     pub crossfade: CrossfadeSettings,
+    /// Whether the Rockbox EQ is currently active. Mirrored on state so the
+    /// TUI can render an indicator without a separate query path.
+    #[serde(default)]
+    pub eq_enabled: bool,
+    #[serde(default)]
+    pub eq_band_count: usize,
 }
 
 impl Default for PlaybackState {
@@ -52,6 +60,8 @@ impl Default for PlaybackState {
             repeat: RepeatMode::Off,
             replaygain: ReplayGainSettings::default(),
             crossfade: CrossfadeSettings::default(),
+            eq_enabled: false,
+            eq_band_count: 0,
         }
     }
 }
@@ -136,6 +146,14 @@ pub trait Renderer: Send + Sync {
     /// SymphoniaPlayer implements this; Chromecast + UPnP receivers each
     /// manage their own track transitions.
     async fn set_crossfade(&self, _settings: CrossfadeSettings) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Enable/disable the Rockbox 10-band equalizer and load the band
+    /// coefficients. `bands` is truncated to `EQ_NUM_BANDS`. Only the local
+    /// SymphoniaPlayer implements this — non-local receivers each apply
+    /// their own EQ (or none).
+    async fn set_eq(&self, _enabled: bool, _bands: Vec<EqBand>) -> anyhow::Result<()> {
         Ok(())
     }
 

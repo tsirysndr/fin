@@ -13,6 +13,8 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use tracing::debug;
 
+use fin_config::EqBand;
+
 use crate::crossfade::CrossfadeSettings;
 use crate::mpv::MpvRenderer;
 use crate::persist::PersistedQueue;
@@ -300,6 +302,11 @@ impl Renderer for LocalRenderer {
     async fn set_crossfade(&self, settings: CrossfadeSettings) -> Result<()> {
         // Only audio-side has the dual-track crossfade wiring.
         self.audio.set_crossfade(settings).await
+    }
+
+    async fn set_eq(&self, enabled: bool, bands: Vec<EqBand>) -> Result<()> {
+        // EQ runs in the audio decode path — mpv-driven video is not affected.
+        self.audio.set_eq(enabled, bands).await
     }
 
     fn state(&self) -> PlaybackState {

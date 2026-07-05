@@ -30,6 +30,47 @@ pub struct Config {
     pub replaygain: ReplayGainSettings,
     #[serde(default)]
     pub crossfade: CrossfadeSettings,
+    /// Rockbox-style top-level equalizer on/off. Matches Rockbox
+    /// `settings.toml` schema so users can share EQ presets.
+    #[serde(default)]
+    pub eq_enabled: bool,
+    /// 10 EQ bands. Band 0 is a low shelf, band 9 a high shelf, the rest
+    /// are peaking filters. `q` and `gain` are in Rockbox tenths (Q × 10,
+    /// dB × 10); `cutoff` is plain Hz. Fresh configs get the ISO-octave
+    /// flat preset (32 Hz…16 kHz, Q 7.0, 0 dB) via `#[serde(default = …)]`.
+    #[serde(default = "default_eq_band_settings")]
+    pub eq_band_settings: Vec<EqBand>,
+}
+
+/// The ISO-octave 10-band flat preset used when a fresh config has no
+/// `[[eq_band_settings]]` section. Cutoffs are the standard ISO center
+/// frequencies (32 / 63 / 125 / 250 / 500 / 1000 / 2000 / 4000 / 8000 /
+/// 16000 Hz); Q is 7.0 across the board; every gain is 0 dB, so the DSP
+/// output is bit-identical to bypass until the user starts tweaking.
+pub fn default_eq_band_settings() -> Vec<EqBand> {
+    const CUTOFFS_HZ: [i32; 10] = [
+        32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000,
+    ];
+    CUTOFFS_HZ
+        .iter()
+        .map(|&hz| EqBand {
+            cutoff: hz,
+            q: 70,
+            gain: 0,
+        })
+        .collect()
+}
+
+/// One EQ band, in the exact on-disk format Rockbox's `[[eq_band_settings]]`
+/// uses so presets round-trip losslessly between the two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EqBand {
+    /// Cutoff frequency in Hz.
+    pub cutoff: i32,
+    /// Q × 10 (e.g. `70` = Q 7.0).
+    pub q: i32,
+    /// Gain × 10 in dB (e.g. `-125` = −12.5 dB).
+    pub gain: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,13 +314,30 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = config_path()?;
         if !path.exists() {
-            return Ok(Self::default());
+            let mut cfg = Self::default();
+            cfg.ensure_eq_bands();
+            return Ok(cfg);
         }
         let text = fs::read_to_string(&path)
             .with_context(|| format!("reading config at {}", path.display()))?;
         let mut cfg: Self = toml::from_str(&text).context("parsing config file")?;
         cfg.migrate_legacy_server();
+        cfg.ensure_eq_bands();
         Ok(cfg)
+    }
+
+    /// Guarantee the EQ always has the full 10 bands. Fills missing slots
+    /// from `default_eq_band_settings()` so the DSP has something to pass
+    /// through and the TUI can render 10 sliders regardless of prior state.
+    fn ensure_eq_bands(&mut self) {
+        if self.eq_band_settings.is_empty() {
+            self.eq_band_settings = default_eq_band_settings();
+        } else if self.eq_band_settings.len() < 10 {
+            let defaults = default_eq_band_settings();
+            for i in self.eq_band_settings.len()..10 {
+                self.eq_band_settings.push(defaults[i]);
+            }
+        }
     }
 
     /// Fold a leftover `[server]` block into the `servers` list. Idempotent.

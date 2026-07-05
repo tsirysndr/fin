@@ -72,7 +72,7 @@ impl RemoteDevice {
 use crate::event::{spawn_event_loop, AppEvent};
 use crate::screens::{item_row_line, RowLayout, Screen};
 use crate::theme::{accent_style, base_style, muted_style, title_style, Palette};
-use crate::widgets::{neon_block, NeonTabs, PlayerBar};
+use crate::widgets::{neon_block, EqSliders, NeonTabs, PlayerBar};
 
 /// Everything the render loop needs.
 pub struct App {
@@ -101,6 +101,9 @@ pub struct App {
     list_state: ListState,
     status_message: Arc<Mutex<Option<(String, Instant)>>>,
     playback_state: Arc<Mutex<PlaybackState>>,
+    /// Which EQ band the user is currently editing (0..N-1). Only meaningful
+    /// on the Settings screen. Nudged by `[` / `]`.
+    eq_selected_band: usize,
     should_quit: bool,
     logo_pulse: u8,
 }
@@ -139,6 +142,7 @@ impl App {
             list_state,
             status_message: Arc::new(Mutex::new(None)),
             playback_state: Arc::new(Mutex::new(PlaybackState::default())),
+            eq_selected_band: 0,
             should_quit: false,
             logo_pulse: 0,
         }
@@ -434,6 +438,37 @@ impl App {
             }
             _ => Ok(vec![item]),
         }
+    }
+
+    /// Adjust the selected EQ band's gain by `delta_tenths` (Rockbox
+    /// tenths-of-dB units). Persists to config and reapplies to the DSP.
+    async fn nudge_eq_band_gain(&mut self, delta_tenths: i32) {
+        let (new_enabled, bands) = {
+            let mut cfg = self.config.lock();
+            if cfg.eq_band_settings.is_empty() {
+                self.set_status("No EQ bands — add [[eq_band_settings]] to config.toml");
+                return;
+            }
+            let idx = self
+                .eq_selected_band
+                .min(cfg.eq_band_settings.len() - 1);
+            let band = &mut cfg.eq_band_settings[idx];
+            band.gain = (band.gain + delta_tenths).clamp(-240, 240);
+            let hz = band.cutoff;
+            let g = band.gain as f32 / 10.0;
+            drop(cfg);
+            self.set_status(format!(
+                "band {}: {} Hz → {:+.1} dB",
+                idx + 1,
+                hz,
+                g
+            ));
+            let cfg = self.config.lock();
+            let _ = cfg.save();
+            (cfg.eq_enabled, cfg.eq_band_settings.clone())
+        };
+        let renderer = self.renderer.lock().clone();
+        let _ = renderer.set_eq(new_enabled, bands).await;
     }
 
     /// Delete the highlighted entry from the queue. If it's the item being
@@ -934,6 +969,15 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 _ => {}
             }
         }
+        // Shift+↑ / Shift+↓ on Settings nudge the highlighted EQ band's
+        // gain by ±1 dB. Must run BEFORE the generic nav arms below or
+        // they'd swallow the shifted variant.
+        (KeyCode::Up, m) if app.screen == Screen::Settings && m.contains(KeyModifiers::SHIFT) => {
+            app.nudge_eq_band_gain(10).await;
+        }
+        (KeyCode::Down, m) if app.screen == Screen::Settings && m.contains(KeyModifiers::SHIFT) => {
+            app.nudge_eq_band_gain(-10).await;
+        }
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
             let len = app.list_len();
             let i = app.list_state.selected().unwrap_or(0);
@@ -1087,6 +1131,35 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 let _ = cfg.save();
                 drop(cfg);
                 app.set_status(format!("Crossfade duration: {:.1}s", next));
+            }
+        }
+        // Equalizer: `E` toggles the Rockbox EQ pipeline.
+        (KeyCode::Char('E'), _) => {
+            let (new_enabled, bands) = {
+                let mut cfg = app.config.lock();
+                cfg.eq_enabled = !cfg.eq_enabled;
+                let _ = cfg.save();
+                (cfg.eq_enabled, cfg.eq_band_settings.clone())
+            };
+            let renderer = app.renderer.lock().clone();
+            if let Err(e) = renderer.set_eq(new_enabled, bands).await {
+                app.set_status(format!("eq: {}", e));
+            } else {
+                app.set_status(if new_enabled { "EQ: on" } else { "EQ: off" });
+            }
+        }
+        // `[` / `]` move between EQ bands on the Settings screen.
+        (KeyCode::Char('['), _) if app.screen == Screen::Settings => {
+            let n = app.config.lock().eq_band_settings.len();
+            if n > 0 {
+                app.eq_selected_band =
+                    (app.eq_selected_band + n - 1) % n;
+            }
+        }
+        (KeyCode::Char(']'), _) if app.screen == Screen::Settings => {
+            let n = app.config.lock().eq_band_settings.len();
+            if n > 0 {
+                app.eq_selected_band = (app.eq_selected_band + 1) % n;
             }
         }
         // Crossfade: `f` cycles off → crossfade → mixed → off. Duration
@@ -1484,7 +1557,11 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Min(4)])
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(11),
+            Constraint::Min(4),
+        ])
         .split(area);
 
     // Top card — global settings.
@@ -1549,6 +1626,62 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
         inner.inner(Margin::new(2, 0)),
     );
 
+    // EQ card — 10-band sliders + status line + interactive hints.
+    let sel_band = if cfg_snapshot.eq_band_settings.is_empty() {
+        None
+    } else {
+        Some(app.eq_selected_band.min(cfg_snapshot.eq_band_settings.len() - 1))
+    };
+    let eq_title = if cfg_snapshot.eq_enabled {
+        format!(
+            " ▤ Equalizer  ({} bands, on) ",
+            cfg_snapshot.eq_band_settings.len()
+        )
+    } else {
+        format!(
+            " ▤ Equalizer  ({} bands, off) ",
+            cfg_snapshot.eq_band_settings.len()
+        )
+    };
+    let eq_block = neon_block(&eq_title, cfg_snapshot.eq_enabled);
+    let eq_inner = eq_block.inner(rows[1]);
+    f.render_widget(eq_block, rows[1]);
+
+    // Split the EQ card into a sliders row and a hint row.
+    let eq_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(1)])
+        .split(eq_inner.inner(Margin::new(1, 0)));
+    f.render_widget(
+        EqSliders {
+            bands: &cfg_snapshot.eq_band_settings,
+            enabled: cfg_snapshot.eq_enabled,
+            selected: sel_band,
+            range_db: 24,
+        },
+        eq_rows[0],
+    );
+    let sel_hint = sel_band
+        .and_then(|i| cfg_snapshot.eq_band_settings.get(i).map(|b| (i, b)))
+        .map(|(i, b)| {
+            format!(
+                "  band {}: {} Hz  Q {:.1}  {:+.1} dB    ",
+                i + 1,
+                b.cutoff,
+                b.q as f32 / 10.0,
+                b.gain as f32 / 10.0,
+            )
+        })
+        .unwrap_or_else(|| "  no bands configured — add [[eq_band_settings]] to config.toml    ".to_string());
+    let hint = format!(
+        "{}E: on/off   [ / ]: band   Shift+↑/↓: ±1 dB",
+        sel_hint
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(hint, muted_style())),
+        eq_rows[1],
+    );
+
     // Bottom card — interactive server list. Enter switches, `t` cycles.
     let current = cfg_snapshot.current_server.clone().unwrap_or_default();
     let items: Vec<ListItem> = cfg_snapshot
@@ -1588,8 +1721,8 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
 
     if items.is_empty() {
         let block = neon_block(&title, true);
-        let inner = block.inner(rows[1]);
-        f.render_widget(block, rows[1]);
+        let inner = block.inner(rows[2]);
+        f.render_widget(block, rows[2]);
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "  No servers yet — run `fin login <url>` to add one.",
@@ -1609,7 +1742,7 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
-    f.render_stateful_widget(list, rows[1], &mut app.list_state);
+    f.render_stateful_widget(list, rows[2], &mut app.list_state);
 }
 
 fn draw_player_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
@@ -1641,7 +1774,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  f/F: crossfade/dur  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
+    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  f/F: crossfade/dur  E: eq  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

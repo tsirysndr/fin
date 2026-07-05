@@ -197,6 +197,12 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
             if let Err(e) = r.set_crossfade(cfg.crossfade).await {
                 tracing::warn!(?e, "crossfade apply failed");
             }
+            if let Err(e) = r
+                .set_eq(cfg.eq_enabled, cfg.eq_band_settings.clone())
+                .await
+            {
+                tracing::warn!(?e, "eq apply failed");
+            }
             if let Some(snap) = saved {
                 if !snap.items.is_empty() {
                     let items_n = snap.items.len();

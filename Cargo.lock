@@ -660,6 +660,7 @@ dependencies = [
  "rand",
  "rb",
  "reqwest",
+ "rockbox-dsp",
  "rust_cast",
  "serde",
  "serde_json",
@@ -1934,6 +1935,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rockbox-dsp"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71ce29fced42c85faa0b1e8df27bc4ad527c066ccb3b6d7bce1345479cd2a4a7"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

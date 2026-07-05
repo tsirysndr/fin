@@ -149,7 +149,8 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = builtins.attrValues self.checks.${system};
 
-          # Everything you need to `cargo run` and actually play back media.
+          # Build-time tools. pkg-config is required so cpal's build.rs can
+          # resolve libasound on Linux.
           nativeBuildInputs = with pkgs; [
             cargo
             rustc
@@ -158,9 +159,14 @@
             rust-analyzer
             mpv
             pkg-config
-          ] ++ lib.optionals pkgs.stdenv.isDarwin [
+          ];
+
+          # Link-time libraries. Position matters: pkg-config only picks up
+          # `.pc` files from `buildInputs`, so alsa-lib MUST live here (not
+          # in nativeBuildInputs) for the cpal → ALSA link to resolve.
+          buildInputs = with pkgs; lib.optionals stdenv.isDarwin [
             libiconv
-          ] ++ lib.optionals pkgs.stdenv.isLinux [
+          ] ++ lib.optionals stdenv.isLinux [
             alsa-lib
           ];
 

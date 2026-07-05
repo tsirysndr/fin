@@ -33,10 +33,10 @@ impl<'a> Widget for EqSliders<'a> {
         let col_w = (area.width as usize / n).max(4) as u16;
         let center_row = area.y + area.height / 2;
 
-        // Reserve top row for dB text, bottom row for Hz text; the middle
-        // rows draw the bar.
+        // Reserve top row for the "+N.N dB" text, bottom row for the Hz
+        // text; every row in between draws the bar.
         let bar_top = area.y + 1;
-        let bar_bot = area.y + area.height.saturating_sub(3);
+        let bar_bot = area.y + area.height.saturating_sub(2);
         let bar_h = bar_bot.saturating_sub(bar_top) as i32;
         if bar_h < 1 {
             return;
@@ -113,16 +113,19 @@ impl<'a> Widget for EqSliders<'a> {
             } else {
                 muted_style()
             };
-            let db_text = format!("{:+.1}", gain_db);
+            // Unit right on the value — "+2.5 dB" reads better than a
+            // stacked "+2.5" / "dB". The muted "dB" span keeps the number
+            // itself easy to scan.
             let db_area = Rect::new(col_x, area.y, col_w, 1);
-            Paragraph::new(Span::styled(db_text, db_style))
-                .alignment(ratatui::layout::Alignment::Center)
-                .render(db_area, buf);
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!("{:+.1} ", gain_db), db_style),
+                Span::styled("dB", muted_style()),
+            ]))
+            .alignment(ratatui::layout::Alignment::Center)
+            .render(db_area, buf);
 
-            // "dB" units row (small hint under the number).
-            let unit_row = area.y + area.height.saturating_sub(2);
+            // Cutoff frequency label under the bar.
             let hz_row = area.y + area.height.saturating_sub(1);
-
             let hz_text = fmt_hz(band.cutoff);
             let hz_style = if is_sel && self.enabled {
                 Style::default()
@@ -131,10 +134,6 @@ impl<'a> Widget for EqSliders<'a> {
             } else {
                 muted_style()
             };
-            let unit_area = Rect::new(col_x, unit_row, col_w, 1);
-            Paragraph::new(Span::styled("dB", muted_style()))
-                .alignment(ratatui::layout::Alignment::Center)
-                .render(unit_area, buf);
             let hz_area = Rect::new(col_x, hz_row, col_w, 1);
             Paragraph::new(Span::styled(hz_text, hz_style))
                 .alignment(ratatui::layout::Alignment::Center)

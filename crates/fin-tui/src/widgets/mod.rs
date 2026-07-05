@@ -1,8 +1,10 @@
 pub mod eq;
+pub mod help;
 pub mod player_bar;
 pub mod tabs;
 
 pub use eq::EqSliders;
+pub use help::HelpModal;
 pub use player_bar::PlayerBar;
 pub use tabs::NeonTabs;
 

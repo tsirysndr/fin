@@ -329,6 +329,7 @@ Tab order — the default screen is **Music**:
 
 | Key                          | Action                              |
 |------------------------------|-------------------------------------|
+| `?`                          | show / hide the full keyboard-shortcuts help modal |
 | `Tab` / `Shift+Tab`          | next / prev screen                  |
 | `1`…`7`                      | jump to Music / Videos / Playlists / Queue / Search / Devices / Settings |
 | `/`                          | jump to Search & focus input        |

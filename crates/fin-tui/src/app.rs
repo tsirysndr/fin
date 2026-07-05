@@ -72,7 +72,7 @@ impl RemoteDevice {
 use crate::event::{spawn_event_loop, AppEvent};
 use crate::screens::{item_row_line, RowLayout, Screen};
 use crate::theme::{accent_style, base_style, muted_style, title_style, Palette};
-use crate::widgets::{neon_block, EqSliders, NeonTabs, PlayerBar};
+use crate::widgets::{neon_block, EqSliders, HelpModal, NeonTabs, PlayerBar};
 
 /// Everything the render loop needs.
 pub struct App {
@@ -104,6 +104,9 @@ pub struct App {
     /// Which EQ band the user is currently editing (0..N-1). Only meaningful
     /// on the Settings screen. Nudged by `[` / `]`.
     eq_selected_band: usize,
+    /// Toggled by `?`. When true, every other key is swallowed by the modal
+    /// and the underlying UI is dimmed by the popup's own background fill.
+    help_open: bool,
     should_quit: bool,
     logo_pulse: u8,
 }
@@ -143,6 +146,7 @@ impl App {
             status_message: Arc::new(Mutex::new(None)),
             playback_state: Arc::new(Mutex::new(PlaybackState::default())),
             eq_selected_band: 0,
+            help_open: false,
             should_quit: false,
             logo_pulse: 0,
         }
@@ -867,6 +871,20 @@ async fn event_loop(
 }
 
 async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    // When the help modal is open, only `?`, Esc, and Ctrl+C do anything —
+    // everything else is deliberately swallowed so the user can't
+    // accidentally play music or switch screens while reading.
+    if app.help_open {
+        match key.code {
+            KeyCode::Char('?') | KeyCode::Esc => app.help_open = false,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.should_quit = true;
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
     // fzf-style search: the input eats printable keys and updates results on
     // every keystroke. Arrow keys still navigate the results list; Enter plays
     // the highlighted item.
@@ -1178,6 +1196,11 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyCode::Char('Y'), _) => {
             app.nudge_tone_treble(1).await;
         }
+        // `?` opens the keyboard-shortcuts modal. The modal itself handles
+        // Esc / ? to close and swallows every other key while it's up.
+        (KeyCode::Char('?'), _) => {
+            app.help_open = true;
+        }
         // Equalizer: `E` toggles the Rockbox EQ pipeline.
         (KeyCode::Char('E'), _) => {
             let (new_enabled, bands) = {
@@ -1258,6 +1281,13 @@ fn draw(f: &mut Frame<'_>, app: &mut App) {
     draw_body(f, chunks[2], app);
     draw_player_bar(f, chunks[3], app);
     draw_status_bar(f, chunks[4], app);
+
+    // Draw the help modal LAST so it lands on top of everything, including
+    // the player bar and status line.
+    if app.help_open {
+        let popup = HelpModal::area_for(size);
+        f.render_widget(HelpModal, popup);
+    }
 }
 
 fn draw_header(f: &mut Frame<'_>, area: Rect, app: &App) {
@@ -2064,7 +2094,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  f/F: crossfade/dur  E: eq  b/B: bass  y/Y: treble  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
+    let help = " ?: help  tab: screen  ↑↓: nav  enter: play/drill  space: pause  s: stop  </>: skip  +/-: vol  z: shuffle  R: repeat  g: replaygain  f/F: crossfade  E: eq  b/B: bass  y/Y: treble  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

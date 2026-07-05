@@ -441,6 +441,26 @@ impl App {
         }
     }
 
+    /// Enter on the Queue screen must NOT replace the queue with just the
+    /// selected item. Instead, restart playback from the current queue's
+    /// selected index — same items, new playhead.
+    async fn jump_to_queue_index(&self) {
+        let Some(idx) = self.list_state.selected() else {
+            return;
+        };
+        let items = self.playback_state.lock().queue.clone();
+        if items.is_empty() || idx >= items.len() {
+            self.set_status("Nothing to jump to.");
+            return;
+        }
+        let title = items[idx].title.clone();
+        let renderer = self.renderer.lock().clone();
+        match renderer.play(items, idx).await {
+            Ok(()) => self.set_status(format!("▶ Jumped to “{}”", title)),
+            Err(e) => self.set_status(format!("jump: {}", e)),
+        }
+    }
+
     async fn play_selected(&mut self, mode: PlayMode) {
         let Some(item) = self.selected_item() else {
             self.set_status("Nothing selected.");
@@ -940,6 +960,10 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     }
                 }
             }
+            // The Queue screen shows the *current* queue — Enter jumps the
+            // playhead inside it instead of collapsing the queue down to a
+            // single item.
+            Screen::Queue => app.jump_to_queue_index().await,
             _ => app.play_selected(PlayMode::PlayNow).await,
         },
         (KeyCode::Char('a'), _) => app.play_selected(PlayMode::Enqueue).await,

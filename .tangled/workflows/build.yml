@@ -16,7 +16,7 @@ dependencies:
 steps:
   - name: nix build
     command: |
-      nix --extra-experimental-features 'nix-command flakes' build .#default --print-build-logs
+      XDG_CACHE_HOME=/tmp/nix-cache nix --extra-experimental-features 'nix-command flakes' build .#default --print-build-logs
       ls -l result/bin
   - name: build cli
     command: |

@@ -955,6 +955,45 @@ impl App {
         }
     }
 
+    /// Whether the active backend serves video at all. Subsonic is
+    /// music-only, so the Videos tab exists only on Jellyfin.
+    fn videos_available(&self) -> bool {
+        self.jf().kind() == fin_config::ServerKind::Jellyfin
+    }
+
+    /// The tab set for the active backend — `Screen::ALL` minus Videos
+    /// when the server is Subsonic.
+    fn visible_screens(&self) -> Vec<Screen> {
+        Screen::ALL
+            .iter()
+            .copied()
+            .filter(|s| *s != Screen::Videos || self.videos_available())
+            .collect()
+    }
+
+    /// Neighbor of the current screen within the visible tab set (`dir`
+    /// is +1 / −1), wrapping. Falls back to the first tab if the current
+    /// screen isn't in the set.
+    fn adjacent_screen(&self, dir: isize) -> Screen {
+        let vis = self.visible_screens();
+        let n = vis.len() as isize;
+        match vis.iter().position(|s| *s == self.screen) {
+            Some(i) => vis[((i as isize + dir + n) % n) as usize],
+            None => vis.first().copied().unwrap_or(Screen::Music),
+        }
+    }
+
+    /// Bounce off screens the new backend doesn't offer — e.g. a server
+    /// switch lands on Subsonic while the Videos tab is open. Call after
+    /// any server switch, before reloading the screen.
+    fn ensure_screen_supported(&mut self) {
+        if self.screen == Screen::Videos && !self.videos_available() {
+            self.screen = Screen::Music;
+            *self.open_series.lock() = None;
+            self.list_state.select(Some(0));
+        }
+    }
+
     async fn switch_to_mpv(&self) {
         // Local playback: audio → symphonia, video → mpv. Persistence is
         // wired in so switching to local while there's a saved queue picks
@@ -1303,12 +1342,12 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.should_quit = true;
         }
         (KeyCode::Tab, _) | (KeyCode::Right, KeyModifiers::CONTROL) => {
-            app.screen = app.screen.next();
+            app.screen = app.adjacent_screen(1);
             app.list_state.select(Some(0));
             app.load_screen().await;
         }
         (KeyCode::BackTab, _) | (KeyCode::Left, KeyModifiers::CONTROL) => {
-            app.screen = app.screen.prev();
+            app.screen = app.adjacent_screen(-1);
             app.list_state.select(Some(0));
             app.load_screen().await;
         }
@@ -1319,10 +1358,15 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.load_screen().await;
         }
         (KeyCode::Char('2'), _) => {
-            app.screen = Screen::Videos;
-            *app.open_series.lock() = None;
-            app.list_state.select(Some(0));
-            app.load_screen().await;
+            // Videos is a Jellyfin-only tab — Subsonic has no video API.
+            if app.videos_available() {
+                app.screen = Screen::Videos;
+                *app.open_series.lock() = None;
+                app.list_state.select(Some(0));
+                app.load_screen().await;
+            } else {
+                app.set_status("Videos are Jellyfin-only — this server is Subsonic.");
+            }
         }
         (KeyCode::Char('3'), _) => {
             app.screen = Screen::Playlists;
@@ -1430,6 +1474,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     if let Err(e) = app.switch_server(&name) {
                         app.set_status(format!("switch: {}", e));
                     } else {
+                        app.ensure_screen_supported();
                         app.load_screen().await;
                     }
                 }
@@ -1483,6 +1528,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         (KeyCode::Char('t'), _) => {
             app.cycle_server();
+            app.ensure_screen_supported();
             app.load_screen().await;
         }
         (KeyCode::Char('z'), _) => {
@@ -1755,11 +1801,12 @@ fn draw_tabs(f: &mut Frame<'_>, area: Rect, app: &App) {
     let block = neon_block("", false);
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let labels: Vec<(&str, &str)> = Screen::ALL.iter().map(|s| (s.icon(), s.label())).collect();
-    let selected = Screen::ALL
-        .iter()
-        .position(|s| *s == app.screen)
-        .unwrap_or(0);
+    // Tab set depends on the backend — Subsonic has no Videos tab. The
+    // number keys stay stable (2 = Videos on Jellyfin, a no-op hint on
+    // Subsonic) since the bar doesn't display digits.
+    let screens = app.visible_screens();
+    let labels: Vec<(&str, &str)> = screens.iter().map(|s| (s.icon(), s.label())).collect();
+    let selected = screens.iter().position(|s| *s == app.screen).unwrap_or(0);
     f.render_widget(NeonTabs::new(&labels, selected), inner);
 }
 

@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queue later.
 
 ### Changed
+- **Videos tab is now Jellyfin-only** — Subsonic has no video API, so on a
+  Subsonic server the tab is hidden from the bar, `Tab`/`Shift+Tab` skip it,
+  and `2` shows a hint. Switching servers while on Videos bounces to Music.
 - **ReplayGain now runs in the Rockbox DSP** — upgraded `rockbox-dsp` to
   0.2.0 and moved gain application into its pre-gain (PGA) stage, the same
   fixed-point pipeline as the EQ and tone controls. Tag extraction stays in

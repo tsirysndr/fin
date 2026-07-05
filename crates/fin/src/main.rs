@@ -127,10 +127,7 @@ fn load_and_merge(cli: &Cli) -> Result<Config> {
                 .clone()
                 .or_else(|| existing.as_ref().map(|s| s.device_id.clone()))
                 .unwrap_or_default(),
-            server_kind: existing
-                .as_ref()
-                .map(|s| s.server_kind)
-                .unwrap_or_default(),
+            server_kind: existing.as_ref().map(|s| s.server_kind).unwrap_or_default(),
         };
         cfg.add_or_update_server(merged);
     } else {
@@ -203,10 +200,7 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
             if let Err(e) = r.set_crossfade(cfg.crossfade).await {
                 tracing::warn!(?e, "crossfade apply failed");
             }
-            if let Err(e) = r
-                .set_eq(cfg.eq_enabled, cfg.eq_band_settings.clone())
-                .await
-            {
+            if let Err(e) = r.set_eq(cfg.eq_enabled, cfg.eq_band_settings.clone()).await {
                 tracing::warn!(?e, "eq apply failed");
             }
             if let Err(e) = r

@@ -1167,8 +1167,7 @@ fn run_worker(
                 // only the biquad delay lines differ. Skip both configs
                 // when no stage is doing anything to avoid the f32↔i16
                 // conversion hops.
-                let dsp_active =
-                    eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
+                let dsp_active = eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
                 let dsp_arg: Option<&mut dyn DspProcess> = if dsp_active {
                     dsp.as_mut().map(|d| d as &mut dyn DspProcess)
                 } else {
@@ -1198,8 +1197,7 @@ fn run_worker(
         if let Some(ref mut nt) = next {
             let free = nt.ring_free_slots();
             if free >= 8192 && !nt.ended {
-                let dsp_active =
-                    eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
+                let dsp_active = eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
                 let dsp_arg: Option<&mut dyn DspProcess> = if dsp_active {
                     voice_dsp.as_mut().map(|d| d as &mut dyn DspProcess)
                 } else {
@@ -1296,7 +1294,10 @@ fn run_worker(
             _ => false,
         };
         if should_promote {
-            debug!(advance = promote_advances_queue, "crossfade complete, promoting next → current");
+            debug!(
+                advance = promote_advances_queue,
+                "crossfade complete, promoting next → current"
+            );
             stop_current(&mut track);
             if let Some(mut nt) = next.take() {
                 nt.overlap_incoming = None;
@@ -1430,7 +1431,9 @@ fn apply_dsp(dsp: &mut dyn DspProcess, samples: &[f32]) -> Vec<f32> {
     // f32 → i16, saturating.
     let mut input = Vec::with_capacity(samples.len());
     for &s in samples {
-        let v = (s * 32767.0).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        let v = (s * 32767.0)
+            .round()
+            .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         input.push(v);
     }
     let mut out_i16: Vec<i16> = Vec::with_capacity(input.len());
@@ -1470,7 +1473,6 @@ fn apply_eq_to_dsp(dsp: &mut Dsp, enabled: bool, bands: &[EqBand]) {
     }
     dsp.eq_enable(enabled);
 }
-
 
 fn push_samples_with_volume(t: &Track, samples: &[f32]) {
     // Effective scale = user volume × ReplayGain linear multiplier ×

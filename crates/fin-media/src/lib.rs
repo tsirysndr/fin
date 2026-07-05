@@ -13,8 +13,8 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
 pub use fin_config::ServerKind;
-pub use fin_jellyfin::{AuthResult, BaseItem, ItemKind, StreamFormat};
 pub use fin_jellyfin::JellyfinClient;
+pub use fin_jellyfin::{AuthResult, BaseItem, ItemKind, StreamFormat};
 pub use fin_subsonic::SubsonicClient;
 
 /// Common browse / search / stream surface. Both backends model the same
@@ -265,10 +265,7 @@ pub async fn probe_server(url: &str) -> Result<ServerKind> {
     }
     // If the winner failed, run the other to completion so we can report
     // its result too.
-    let (jf, ss) = tokio::join!(
-        probe_jellyfin(&http, base),
-        probe_subsonic(&http, base),
-    );
+    let (jf, ss) = tokio::join!(probe_jellyfin(&http, base), probe_subsonic(&http, base),);
     if jf.is_ok() {
         return Ok(ServerKind::Jellyfin);
     }
@@ -323,11 +320,7 @@ async fn probe_subsonic(http: &reqwest::Client, base: &str) -> Result<ServerKind
 
 /// One-shot auth wrapper: probe the server, log in with the right client,
 /// and return everything wired up as `Arc<dyn MediaClient>`.
-pub async fn login_any(
-    url: &str,
-    username: &str,
-    password: &str,
-) -> Result<LoggedIn> {
+pub async fn login_any(url: &str, username: &str, password: &str) -> Result<LoggedIn> {
     let kind = probe_server(url).await?;
     match kind {
         ServerKind::Jellyfin => {

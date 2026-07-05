@@ -134,10 +134,7 @@ impl Widget for HelpModal {
         // Split into as many horizontal rows as the widget occupies, one
         // Line per row. We rely on Paragraph's wrapping for width overflow.
         let lines = build_lines(inner.width as usize);
-        let footer = Line::from(vec![Span::styled(
-            "  ? or Esc to close",
-            muted_style(),
-        )]);
+        let footer = Line::from(vec![Span::styled("  ? or Esc to close", muted_style())]);
 
         let rows = Layout::default()
             .direction(Direction::Vertical)
@@ -176,17 +173,15 @@ fn build_lines(width: usize) -> Vec<Line<'static>> {
         if idx > 0 {
             lines.push(Line::from(""));
         }
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {}", section.title),
-                Style::default()
-                    .fg(Palette::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", section.title),
+            Style::default()
+                .fg(Palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )]));
         for entry in section.entries {
-            let key_pad = key_col_max
-                .saturating_sub(unicode_width::UnicodeWidthStr::width(entry.key));
+            let key_pad =
+                key_col_max.saturating_sub(unicode_width::UnicodeWidthStr::width(entry.key));
             lines.push(Line::from(vec![
                 Span::raw("    "),
                 Span::styled(
@@ -223,7 +218,11 @@ mod tests {
     fn every_entry_has_non_empty_key_and_description() {
         for s in HELP_SECTIONS {
             for e in s.entries {
-                assert!(!e.key.trim().is_empty(), "empty key in section '{}'", s.title);
+                assert!(
+                    !e.key.trim().is_empty(),
+                    "empty key in section '{}'",
+                    s.title
+                );
                 assert!(
                     !e.description.trim().is_empty(),
                     "empty description for '{}'",

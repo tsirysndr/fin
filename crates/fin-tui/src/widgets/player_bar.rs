@@ -165,10 +165,7 @@ impl<'a> Widget for PlayerBar<'a> {
         };
         let tone_span = if self.state.bass_db != 0 || self.state.treble_db != 0 {
             Span::styled(
-                format!(
-                    "B{:+}/T{:+} ",
-                    self.state.bass_db, self.state.treble_db
-                ),
+                format!("B{:+}/T{:+} ", self.state.bass_db, self.state.treble_db),
                 Style::default()
                     .fg(Palette::HIGHLIGHT)
                     .add_modifier(Modifier::BOLD),

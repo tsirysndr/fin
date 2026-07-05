@@ -520,20 +520,13 @@ impl App {
                 self.set_status("No EQ bands — add [[eq_band_settings]] to config.toml");
                 return;
             }
-            let idx = self
-                .eq_selected_band
-                .min(cfg.eq_band_settings.len() - 1);
+            let idx = self.eq_selected_band.min(cfg.eq_band_settings.len() - 1);
             let band = &mut cfg.eq_band_settings[idx];
             band.gain = (band.gain + delta_tenths).clamp(-240, 240);
             let hz = band.cutoff;
             let g = band.gain as f32 / 10.0;
             drop(cfg);
-            self.set_status(format!(
-                "band {}: {} Hz → {:+.1} dB",
-                idx + 1,
-                hz,
-                g
-            ));
+            self.set_status(format!("band {}: {} Hz → {:+.1} dB", idx + 1, hz, g));
             let cfg = self.config.lock();
             let _ = cfg.save();
             (cfg.eq_enabled, cfg.eq_band_settings.clone())
@@ -629,8 +622,7 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    *status.lock() =
-                        Some((format!("favorite failed: {}", e), Instant::now()))
+                    *status.lock() = Some((format!("favorite failed: {}", e), Instant::now()))
                 }
             }
         });
@@ -1135,7 +1127,11 @@ fn queue_item_to_base_item(q: &fin_player::QueueItem) -> BaseItem {
     BaseItem {
         id: q.id.clone(),
         name: q.title.clone(),
-        type_: if q.is_video { "Video".into() } else { "Audio".into() },
+        type_: if q.is_video {
+            "Video".into()
+        } else {
+            "Audio".into()
+        },
         album: None,
         album_id: None,
         album_artist: None,
@@ -1147,7 +1143,11 @@ fn queue_item_to_base_item(q: &fin_player::QueueItem) -> BaseItem {
         series_name: None,
         production_year: None,
         run_time_ticks: q.duration_secs.map(|s| (s * 10_000_000) as i64),
-        media_type: Some(if q.is_video { "Video".into() } else { "Audio".into() }),
+        media_type: Some(if q.is_video {
+            "Video".into()
+        } else {
+            "Audio".into()
+        }),
         container: None,
         index_number: None,
         parent_index_number: None,
@@ -1521,8 +1521,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyCode::Char('['), _) if app.screen == Screen::Settings => {
             let n = app.config.lock().eq_band_settings.len();
             if n > 0 {
-                app.eq_selected_band =
-                    (app.eq_selected_band + n - 1) % n;
+                app.eq_selected_band = (app.eq_selected_band + n - 1) % n;
             }
         }
         (KeyCode::Char(']'), _) if app.screen == Screen::Settings => {
@@ -1861,11 +1860,8 @@ fn draw_album_tracks(f: &mut Frame<'_>, area: Rect, app: &mut App, album: Option
     if tracks.is_empty() {
         f.render_widget(block, area);
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "  Loading tracks…",
-                muted_style(),
-            )))
-            .alignment(Alignment::Center),
+            Paragraph::new(Line::from(Span::styled("  Loading tracks…", muted_style())))
+                .alignment(Alignment::Center),
             inner.inner(Margin::new(2, 1)),
         );
         return;
@@ -1906,14 +1902,12 @@ fn draw_album_tracks(f: &mut Frame<'_>, area: Rect, app: &mut App, album: Option
         let disc = track.parent_index_number.unwrap_or(1);
         if show_disc_headers && current_disc != Some(disc) {
             header_visual_indices.push(items.len());
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("   ▤ Disc {}", disc),
-                    Style::default()
-                        .fg(Palette::ACCENT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])));
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                format!("   ▤ Disc {}", disc),
+                Style::default()
+                    .fg(Palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            )])));
             current_disc = Some(disc);
         }
         track_to_visual.push(items.len());
@@ -1988,10 +1982,7 @@ fn album_track_row<'a>(
     } else {
         String::new()
     };
-    let time = track
-        .duration_secs()
-        .map(fmt_dur_local)
-        .unwrap_or_default();
+    let time = track.duration_secs().map(fmt_dur_local).unwrap_or_default();
     let time_pad = layout
         .time_col
         .saturating_sub(UnicodeWidthStr::width(time.as_str()));
@@ -2249,19 +2240,13 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
         ]),
         Line::from(vec![
             Span::styled("  Tone          ", title_style()),
-            Span::styled(
-                format!("bass {:+} dB", cfg_snapshot.bass),
-                accent_style(),
-            ),
+            Span::styled(format!("bass {:+} dB", cfg_snapshot.bass), accent_style()),
             Span::styled("   ", muted_style()),
             Span::styled(
                 format!("treble {:+} dB", cfg_snapshot.treble),
                 accent_style(),
             ),
-            Span::styled(
-                "   (b/B: bass, y/Y: treble; 1 dB steps)",
-                muted_style(),
-            ),
+            Span::styled("   (b/B: bass, y/Y: treble; 1 dB steps)", muted_style()),
         ]),
         Line::from(vec![
             Span::styled("  Config File   ", title_style()),
@@ -2284,7 +2269,10 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
     let sel_band = if cfg_snapshot.eq_band_settings.is_empty() {
         None
     } else {
-        Some(app.eq_selected_band.min(cfg_snapshot.eq_band_settings.len() - 1))
+        Some(
+            app.eq_selected_band
+                .min(cfg_snapshot.eq_band_settings.len() - 1),
+        )
     };
     let eq_title = if cfg_snapshot.eq_enabled {
         format!(
@@ -2326,11 +2314,10 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
                 b.gain as f32 / 10.0,
             )
         })
-        .unwrap_or_else(|| "  no bands configured — add [[eq_band_settings]] to config.toml    ".to_string());
-    let hint = format!(
-        "{}E: on/off   [ / ]: band   Shift+↑/↓: ±1 dB",
-        sel_hint
-    );
+        .unwrap_or_else(|| {
+            "  no bands configured — add [[eq_band_settings]] to config.toml    ".to_string()
+        });
+    let hint = format!("{}E: on/off   [ / ]: band   Shift+↑/↓: ±1 dB", sel_hint);
     f.render_widget(
         Paragraph::new(Span::styled(hint, muted_style())),
         eq_rows[1],
@@ -2511,10 +2498,7 @@ mod tests {
             track("d2-t2", Some(2), Some(2)),
         ];
         sort_album_tracks(&mut v);
-        assert_eq!(
-            names(&v),
-            vec!["d1-t1", "d1-t2", "d2-t1", "d2-t2"]
-        );
+        assert_eq!(names(&v), vec!["d1-t1", "d1-t2", "d2-t1", "d2-t2"]);
     }
 
     #[test]

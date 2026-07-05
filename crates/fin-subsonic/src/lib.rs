@@ -154,12 +154,7 @@ impl SubsonicClient {
         Ok(album.song.into_iter().map(song_to_base_item).collect())
     }
 
-    pub async fn search(
-        &self,
-        query: &str,
-        _kinds: &[&str],
-        limit: u32,
-    ) -> Result<Vec<BaseItem>> {
+    pub async fn search(&self, query: &str, _kinds: &[&str], limit: u32) -> Result<Vec<BaseItem>> {
         let per = limit.min(50);
         let resp: SearchResp = self
             .get_json(
@@ -204,7 +199,11 @@ impl SubsonicClient {
         let p = resp
             .playlist()
             .ok_or_else(|| anyhow!("playlist {} not found", id))?;
-        Ok(p.entry.unwrap_or_default().into_iter().map(song_to_base_item).collect())
+        Ok(p.entry
+            .unwrap_or_default()
+            .into_iter()
+            .map(song_to_base_item)
+            .collect())
     }
 
     /// Everything the user has starred — albums first, then songs, matching
@@ -228,9 +227,7 @@ impl SubsonicClient {
     /// Star (`star`) or unstar (`unstar`) a song / album / artist by id.
     pub async fn set_star(&self, id: &str, star: bool) -> Result<()> {
         let endpoint = if star { "star" } else { "unstar" };
-        let resp: PingResp = self
-            .get_json(endpoint, &[("id", id.to_string())])
-            .await?;
+        let resp: PingResp = self.get_json(endpoint, &[("id", id.to_string())]).await?;
         resp.check()
     }
 
@@ -342,8 +339,7 @@ impl SubsonicClient {
             .error_for_status()?
             .text()
             .await?;
-        serde_json::from_str(&text)
-            .with_context(|| format!("parsing {} response", endpoint))
+        serde_json::from_str(&text).with_context(|| format!("parsing {} response", endpoint))
     }
 }
 
@@ -404,7 +400,12 @@ fn check_status(status: &str, error: Option<&SubsonicError>) -> Result<()> {
         return Ok(());
     }
     let (code, msg) = error
-        .map(|e| (e.code.unwrap_or(-1), e.message.as_deref().unwrap_or("unknown")))
+        .map(|e| {
+            (
+                e.code.unwrap_or(-1),
+                e.message.as_deref().unwrap_or("unknown"),
+            )
+        })
         .unwrap_or((-1, "unknown"));
     Err(anyhow!("subsonic error {}: {}", code, msg))
 }

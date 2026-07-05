@@ -58,7 +58,8 @@ impl<'a> Widget for EqSliders<'a> {
             let ratio = clamped / self.range_db as f32; // −1..=+1
             let half_h = bar_h / 2;
             let offset = ((ratio * half_h as f32).round()) as i32;
-            let bar_end_row = (center_row as i32 - offset).clamp(bar_top as i32, bar_bot as i32) as u16;
+            let bar_end_row =
+                (center_row as i32 - offset).clamp(bar_top as i32, bar_bot as i32) as u16;
 
             // Bar style — muted when EQ off, highlighted on the selected band.
             let is_sel = self.selected == Some(i);
@@ -95,11 +96,7 @@ impl<'a> Widget for EqSliders<'a> {
             for r in from..=to {
                 if let Some(cell) = buf.cell_mut((bar_x, r)) {
                     cell.set_char('█');
-                    cell.set_style(
-                        Style::default()
-                            .fg(bar_color)
-                            .add_modifier(Modifier::BOLD),
-                    );
+                    cell.set_style(Style::default().fg(bar_color).add_modifier(Modifier::BOLD));
                 }
             }
 

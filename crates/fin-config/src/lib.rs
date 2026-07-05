@@ -60,9 +60,7 @@ pub struct Config {
 /// 16000 Hz); Q is 7.0 across the board; every gain is 0 dB, so the DSP
 /// output is bit-identical to bypass until the user starts tweaking.
 pub fn default_eq_band_settings() -> Vec<EqBand> {
-    const CUTOFFS_HZ: [i32; 10] = [
-        32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000,
-    ];
+    const CUTOFFS_HZ: [i32; 10] = [32, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
     CUTOFFS_HZ
         .iter()
         .map(|&hz| EqBand {

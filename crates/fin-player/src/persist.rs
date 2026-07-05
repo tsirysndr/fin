@@ -121,8 +121,10 @@ mod tests {
         // Unique-per-call so parallel tests don't step on each other.
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir()
-            .join(format!("fin-persist-test-{name}-{}-{n}.json", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "fin-persist-test-{name}-{}-{n}.json",
+            std::process::id()
+        ))
     }
 
     // ------------------------------------------------------------------

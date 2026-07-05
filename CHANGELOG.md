@@ -5,6 +5,16 @@ All notable changes to `fin` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **ReplayGain now runs in the Rockbox DSP** — upgraded `rockbox-dsp` to
+  0.2.0 and moved gain application into its pre-gain (PGA) stage, the same
+  fixed-point pipeline as the EQ and tone controls. Tag extraction stays in
+  fin; the old f32 multiplier survives only as a fallback for paths the PGA
+  can't reach (crossfade-incoming track, non-stereo output, first primed
+  packet).
+
 ## [0.3.0] - 2026-07-05
 
 ### Added

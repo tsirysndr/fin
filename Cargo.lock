@@ -1984,9 +1984,9 @@ dependencies = [
 
 [[package]]
 name = "rockbox-dsp"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71ce29fced42c85faa0b1e8df27bc4ad527c066ccb3b6d7bce1345479cd2a4a7"
+checksum = "4310fa190f0ffdd5dd2c49578dbe5111d8a068b4a51f8baa6d2e5f94d1dec80a"
 dependencies = [
  "cc",
 ]

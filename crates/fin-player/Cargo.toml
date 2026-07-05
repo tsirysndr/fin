@@ -34,7 +34,7 @@ rb = "0.4"
 # already, so this is a zero-cost explicit dep.
 rand = "0.9"
 
-# Rockbox DSP pipeline — 10-band EQ, tone controls, resample, crossfeed, …
-# Note: the compiled C sources are GPL-2.0-or-later — linking makes the
-# binary GPL when EQ code is included.
-rockbox-dsp = "0.1"
+# Rockbox DSP pipeline — 10-band EQ, tone controls, ReplayGain pre-gain,
+# resample, crossfeed, … Note: the compiled C sources are
+# GPL-2.0-or-later — linking makes the binary GPL when EQ code is included.
+rockbox-dsp = "0.2"

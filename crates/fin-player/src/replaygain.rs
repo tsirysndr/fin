@@ -1,10 +1,17 @@
-//! ReplayGain support — read `REPLAYGAIN_*` tags from decoded tracks and
-//! compute the linear gain multiplier to apply to samples before they go
-//! out to cpal.
+//! ReplayGain support — read `REPLAYGAIN_*` tags from decoded tracks.
 //!
 //! Reference: <https://en.wikipedia.org/wiki/ReplayGain>
 //!
-//! Applied gain formula:
+//! The gain itself is applied by the Rockbox DSP's pre-gain (PGA) stage
+//! (`rockbox_dsp::Dsp::set_replaygain` + `set_replaygain_gains`), in
+//! fixed point, as part of the same pipeline that runs the EQ and tone
+//! controls. This module only extracts the tags and computes the f32
+//! fallback multiplier ([`ReplayGainInfo::linear_gain`]) for the paths
+//! the PGA can't cover: the crossfade-incoming track (routed through the
+//! voice DSP config, which Rockbox gives no PGA stage), non-stereo
+//! output (the DSP is skipped entirely), and the first primed packet.
+//!
+//! Fallback gain formula (mirrors Rockbox's `dsp_replaygain_update`):
 //! ```text
 //! gain_dB   = base_gain_dB + preamp_dB
 //! linear    = 10 ^ (gain_dB / 20)
@@ -16,6 +23,8 @@
 //!
 //! Falls back gracefully: if the requested mode's tags are missing, we try
 //! the other mode; if both are missing, gain is 1.0 (i.e. no adjustment).
+//! Rockbox's PGA does the same track ↔ album fallback internally, so the
+//! two paths resolve the same gain.
 
 use symphonia::core::formats::FormatReader;
 use symphonia::core::meta::StandardTagKey;
@@ -96,9 +105,10 @@ impl ReplayGainInfo {
         }
     }
 
-    /// Compute the linear multiplier to apply to samples. Returns 1.0 when
-    /// the mode is `Off` or the requested tags aren't present (with a
-    /// fall-through to the other mode's tags).
+    /// Compute the f32 fallback multiplier for samples that bypass the
+    /// Rockbox PGA stage (see module docs). Returns 1.0 when the mode is
+    /// `Off` or the requested tags aren't present (with a fall-through to
+    /// the other mode's tags).
     pub fn linear_gain(&self, settings: ReplayGainSettings) -> f32 {
         if !settings.mode.is_active() {
             return 1.0;

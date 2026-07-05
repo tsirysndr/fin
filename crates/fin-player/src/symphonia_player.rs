@@ -27,7 +27,9 @@ use symphonia::core::units::{Time, TimeBase};
 use tracing::{debug, error, warn};
 
 use fin_config::EqBand;
-use rockbox_dsp::{eq_band_setting, Dsp, EQ_NUM_BANDS};
+use rockbox_dsp::{
+    eq_band_setting, Dsp, EQ_NUM_BANDS, REPLAYGAIN_ALBUM, REPLAYGAIN_OFF, REPLAYGAIN_TRACK,
+};
 
 use crate::voice_dsp::VoiceDsp;
 
@@ -54,7 +56,7 @@ use crate::crossfade::{fade_at, CrossfadeMode, CrossfadeSettings};
 use crate::persist::{PersistedQueue, Persister};
 use crate::queue::{PlaybackQueue, QueueItem};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
-use crate::replaygain::{ReplayGainInfo, ReplayGainSettings};
+use crate::replaygain::{ReplayGainInfo, ReplayGainMode, ReplayGainSettings};
 
 /// A local, audio-only renderer. Streams the HTTP body, decodes with symphonia,
 /// and pushes float samples to the default cpal output device.
@@ -471,10 +473,19 @@ struct Track {
     paused: Arc<AtomicBool>,
     // Instant we started the current track — used only as a tie-breaker in logs.
     _started: Instant,
-    // ReplayGain tags read from the track, plus the linear gain that
-    // currently-active settings resolve to. Recomputed on SetReplayGain.
+    // ReplayGain tags read from the track. The gain itself is applied by
+    // the Rockbox DSP's pre-gain (PGA) stage — these tags are handed to
+    // the audio DSP config once this track becomes current (see
+    // `rg_gains_pushed`).
     replaygain_info: ReplayGainInfo,
+    // Fallback linear multiplier for samples the Rockbox PGA can't touch:
+    // the crossfade-incoming path (routed through the voice DSP config,
+    // which has no PGA stage), non-stereo output (DSP skipped entirely),
+    // and the first primed packet. Recomputed on SetReplayGain.
     replaygain_linear: f32,
+    // True once this track's RG tags have been pushed into the audio DSP.
+    // Reset per-track so promotion / track changes re-push.
+    rg_gains_pushed: bool,
     // True once the decoder has returned EndOfStream (no more packets).
     // Used by the crossfade path — we can't advance the queue on EOF
     // anymore because that's the promotion step's job.
@@ -667,7 +678,8 @@ fn run_worker(
     // on the first track load (we need the device output rate). The
     // instance is a process-wide singleton (`CODEC_IDX_AUDIO`), so we
     // never own two at once — the crossfade `next` track bypasses it and
-    // uses the plain resampler.
+    // uses the plain resampler. Besides EQ/tone this config also owns the
+    // PGA stage, which applies ReplayGain in fixed point.
     let mut dsp: Option<Dsp> = None;
     // Second DSP instance bound to Rockbox's `CODEC_IDX_VOICE`. Rockbox
     // shares EQ / tone coefficients across configs but keeps biquad delay
@@ -1023,6 +1035,14 @@ fn run_worker(
                 }
                 PlayerCommand::SetReplayGain(settings) => {
                     rg_settings = settings;
+                    // The DSP stashes per-track gains internally, so a
+                    // settings change alone recomputes the pre-gain — no
+                    // need to re-push the current track's tags.
+                    if let Some(ref mut d) = dsp {
+                        apply_replaygain_to_dsp(d, settings);
+                    }
+                    // Refresh the f32 fallback multipliers (crossfade
+                    // incoming / non-stereo paths).
                     if let Some(ref mut t) = track {
                         t.replaygain_linear = t.replaygain_info.linear_gain(settings);
                     }
@@ -1149,6 +1169,7 @@ fn run_worker(
                     tone_bass_cutoff_hz,
                     tone_treble_cutoff_hz,
                 );
+                apply_replaygain_to_dsp(&mut d, rg_settings);
                 dsp = Some(d);
                 // Spin up the second config now too — cheap, and it means
                 // the crossfade preload path never blocks on init.
@@ -1159,6 +1180,17 @@ fn run_worker(
                 }
             }
 
+            // Hand this track's RG tags to the audio DSP's PGA stage the
+            // first time it decodes as current — covers fresh loads and
+            // crossfade promotions alike. Pushed even with RG off so a
+            // later mode toggle picks them up without a reload.
+            if !t.rg_gains_pushed {
+                if let Some(ref mut d) = dsp {
+                    apply_replaygain_gains_to_dsp(d, &t.replaygain_info);
+                    t.rg_gains_pushed = true;
+                }
+            }
+
             let free = t.ring_free_slots();
             if free >= 8192 && !t.ended {
                 // Current track always uses the AUDIO Rockbox config; the
@@ -1166,14 +1198,18 @@ fn run_worker(
                 // below. Coefficients are global, so the EQ curve matches;
                 // only the biquad delay lines differ. Skip both configs
                 // when no stage is doing anything to avoid the f32↔i16
-                // conversion hops.
-                let dsp_active = eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
+                // conversion hops. ReplayGain counts as a stage here — it
+                // runs in the audio config's PGA.
+                let dsp_active = eq_enabled
+                    || tone_bass_db != 0
+                    || tone_treble_db != 0
+                    || rg_settings.mode.is_active();
                 let dsp_arg: Option<&mut dyn DspProcess> = if dsp_active {
                     dsp.as_mut().map(|d| d as &mut dyn DspProcess)
                 } else {
                     None
                 };
-                match decode_one_packet(t, dsp_arg) {
+                match decode_one_packet(t, dsp_arg, true) {
                     DecodeStep::Pushed => update_position(&state, t),
                     DecodeStep::EndOfStream => {
                         debug!(item = %t.item.title, "current track ended");
@@ -1193,7 +1229,10 @@ fn run_worker(
         // AUDIO config's biquad delay lines are undisturbed — that's what
         // caused the "small noises" during overlap in the previous
         // shared-DSP version. Coefficients are still global, so the EQ
-        // curve is identical on both sides.
+        // curve is identical on both sides. The voice config has NO PGA
+        // stage (Rockbox hardwires ReplayGain to the audio config), so
+        // this side gets its RG via the f32 fallback multiplier instead
+        // — `rg_in_dsp = false` below.
         if let Some(ref mut nt) = next {
             let free = nt.ring_free_slots();
             if free >= 8192 && !nt.ended {
@@ -1203,7 +1242,7 @@ fn run_worker(
                 } else {
                     None
                 };
-                match decode_one_packet(nt, dsp_arg) {
+                match decode_one_packet(nt, dsp_arg, false) {
                     DecodeStep::Pushed => {}
                     DecodeStep::EndOfStream => nt.ended = true,
                     DecodeStep::Error(e) => {
@@ -1375,7 +1414,16 @@ enum DecodeStep {
     Error(String),
 }
 
-fn decode_one_packet(t: &mut Track, dsp: Option<&mut dyn DspProcess>) -> DecodeStep {
+/// Decode one packet, run it through the given DSP config (if any) and
+/// push it to the ring. `rg_in_dsp` says whether that config applies
+/// ReplayGain in its PGA stage (true only for the AUDIO config) — when it
+/// does, the f32 fallback multiplier is skipped so gain isn't applied
+/// twice.
+fn decode_one_packet(
+    t: &mut Track,
+    dsp: Option<&mut dyn DspProcess>,
+    rg_in_dsp: bool,
+) -> DecodeStep {
     let packet = match t.format.next_packet() {
         Ok(p) => p,
         Err(symphonia::core::errors::Error::IoError(e))
@@ -1408,18 +1456,25 @@ fn decode_one_packet(t: &mut Track, dsp: Option<&mut dyn DspProcess>) -> DecodeS
     if out_samples.is_empty() {
         return DecodeStep::Pushed;
     }
-    // Rockbox EQ post-processing — Dsp only handles interleaved stereo, so
-    // for non-stereo output we skip and let the samples through untouched.
+    // Rockbox DSP post-processing — Dsp only handles interleaved stereo,
+    // so for non-stereo output we skip it (and fall back to the f32
+    // ReplayGain multiplier below).
+    let mut rg_mult = t.replaygain_linear;
     if let Some(d) = dsp {
         if t.output_channels == 2 {
             out_samples = apply_dsp(d, &out_samples);
+            if rg_in_dsp {
+                // The audio config's PGA stage already applied ReplayGain
+                // in fixed point.
+                rg_mult = 1.0;
+            }
             if out_samples.is_empty() {
                 return DecodeStep::Pushed;
             }
         }
     }
     let out_frames = out_samples.len() / t.output_channels.max(1);
-    push_samples_with_volume(t, &out_samples);
+    push_samples_with_volume(t, &out_samples, rg_mult);
     t.produced_output_frames += out_frames as u64;
     DecodeStep::Pushed
 }
@@ -1458,6 +1513,31 @@ fn apply_tone_to_dsp(
     dsp.set_tone(bass_db, treble_db);
 }
 
+/// Map fin's ReplayGain settings onto the Rockbox PGA stage: mode, clip
+/// prevention, preamp. The per-track gains are pushed separately via
+/// [`apply_replaygain_gains_to_dsp`]; the DSP stashes both and recomputes
+/// the pre-gain whenever either changes.
+fn apply_replaygain_to_dsp(dsp: &mut Dsp, settings: ReplayGainSettings) {
+    let mode = match settings.mode {
+        ReplayGainMode::Off => REPLAYGAIN_OFF,
+        ReplayGainMode::Track => REPLAYGAIN_TRACK,
+        ReplayGainMode::Album => REPLAYGAIN_ALBUM,
+    };
+    dsp.set_replaygain(mode, settings.prevent_clip, settings.preamp_db);
+}
+
+/// Hand a track's RG tags to the audio DSP config. Rockbox falls back
+/// track ↔ album internally when the requested scope's tag is absent,
+/// matching the old fin behavior.
+fn apply_replaygain_gains_to_dsp(dsp: &mut Dsp, info: &ReplayGainInfo) {
+    dsp.set_replaygain_gains(
+        info.track_gain_db,
+        info.album_gain_db,
+        info.track_peak,
+        info.album_peak,
+    );
+}
+
 /// Apply an on/off toggle plus the current bands to the Dsp singleton.
 /// Truncates to EQ_NUM_BANDS silently.
 fn apply_eq_to_dsp(dsp: &mut Dsp, enabled: bool, bands: &[EqBand]) {
@@ -1474,12 +1554,14 @@ fn apply_eq_to_dsp(dsp: &mut Dsp, enabled: bool, bands: &[EqBand]) {
     dsp.eq_enable(enabled);
 }
 
-fn push_samples_with_volume(t: &Track, samples: &[f32]) {
-    // Effective scale = user volume × ReplayGain linear multiplier ×
-    // per-frame fade envelope. Volume + RG are constant across the batch;
-    // the fade multiplier walks per output frame using this track's own
+fn push_samples_with_volume(t: &Track, samples: &[f32], rg_mult: f32) {
+    // Effective scale = user volume × ReplayGain fallback multiplier ×
+    // per-frame fade envelope. `rg_mult` is 1.0 when the Rockbox PGA
+    // stage already gained these samples; otherwise it's the track's f32
+    // fallback. Volume + RG are constant across the batch; the fade
+    // multiplier walks per output frame using this track's own
     // produced_output_frames counter.
-    let base = f32::from_bits(t.volume.load(Ordering::Relaxed)) * t.replaygain_linear;
+    let base = f32::from_bits(t.volume.load(Ordering::Relaxed)) * rg_mult;
     let ch = t.output_channels.max(1);
     let mut offset = 0;
     while offset < samples.len() {
@@ -1797,7 +1879,9 @@ fn load_track(
 
     // 4b. Read whatever ReplayGain tags this track carries. Done AFTER the
     //     first-packet decode primer above — several formats only expose
-    //     metadata once the first packet has flown by.
+    //     metadata once the first packet has flown by. The tags are pushed
+    //     into the Rockbox PGA when this track starts decoding as current;
+    //     the linear value is the f32 fallback for DSP-bypassing paths.
     let replaygain_info = ReplayGainInfo::extract_from(&mut format);
     let replaygain_linear = replaygain_info.linear_gain(rg_settings);
     debug!(
@@ -1832,6 +1916,7 @@ fn load_track(
         _started: Instant::now(),
         replaygain_info,
         replaygain_linear,
+        rg_gains_pushed: false,
         ended: false,
         overlap_incoming: None,
         overlap_outgoing: None,
@@ -1839,7 +1924,10 @@ fn load_track(
     let first_out = resampler.process(&first_samples);
     if !first_out.is_empty() {
         let frames = first_out.len() / output_channels.max(1);
-        push_samples_with_volume(&track, &first_out);
+        // The primed packet never routes through the DSP, so it takes the
+        // f32 ReplayGain fallback — same magnitude as the PGA gain the
+        // following packets get, so there's no audible seam.
+        push_samples_with_volume(&track, &first_out, track.replaygain_linear);
         track.produced_output_frames += frames as u64;
     }
     // Adopt the primed resampler state.

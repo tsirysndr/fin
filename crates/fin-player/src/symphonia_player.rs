@@ -348,20 +348,26 @@ struct Track {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn Decoder>,
     track_id: u32,
-    sample_rate: u32,
-    channels: usize,
+    // Source (decoded) audio spec — what symphonia hands us. `source_channels`
+    // lives on the Resampler; only `source_sr` is used for duration reporting.
+    source_sr: u32,
+    // Output (cpal) audio spec — what the OS device consumes.
+    output_sr: u32,
+    output_channels: usize,
     time_base: Option<TimeBase>,
     total_frames: Option<u64>,
-    // Frames the decoder has produced so far; used for position reporting.
-    produced_frames: u64,
+    // OUTPUT frames pushed to the ring so far — the ring holds output-rate
+    // samples, so this is what "position" is computed against.
+    produced_output_frames: u64,
     // Backing samples buffer we reuse packet-to-packet.
     sample_buf: Option<SampleBuffer<f32>>,
+    // Resamples + channel-converts source → output.
+    resampler: Resampler,
     // Producer half of the ring buffer feeding the cpal callback.
     producer: Producer<f32>,
     // Kept so we can query occupancy (`Producer` alone can't).
     ring: Arc<SpscRb<f32>>,
-    // Total slot count of the ring (channels-interleaved). Latency from
-    // decode → speaker is approximately this / (channels * sample_rate).
+    // Total slot count of the ring (output_channels-interleaved).
     ring_capacity: usize,
     // Cancellation flag for the fetcher — flipped when we drop the track early.
     fetch_cancel: Arc<Mutex<SharedBuf>>,
@@ -377,10 +383,10 @@ struct Track {
 }
 
 impl Track {
-    /// Frames currently sitting in the ring, waiting to be played out.
+    /// Output frames currently sitting in the ring, waiting to be played out.
     fn ring_pending_frames(&self) -> usize {
         let used = self.ring.count();
-        used / self.channels.max(1)
+        used / self.output_channels.max(1)
     }
 
     fn ring_free_slots(&self) -> usize {
@@ -388,11 +394,11 @@ impl Track {
     }
 
     fn position_secs(&self) -> f64 {
-        // "Playhead" = frames the callback has consumed = produced - pending.
+        // Playhead: output frames consumed by cpal / output_sr = wall-clock seconds.
         let played = self
-            .produced_frames
+            .produced_output_frames
             .saturating_sub(self.ring_pending_frames() as u64);
-        played as f64 / self.sample_rate as f64
+        played as f64 / self.output_sr as f64
     }
 
     fn duration_secs(&self) -> f64 {
@@ -400,10 +406,120 @@ impl Track {
             let t = tb.calc_time(n);
             t.seconds as f64 + t.frac
         } else if let Some(n) = self.total_frames {
-            n as f64 / self.sample_rate as f64
+            n as f64 / self.source_sr as f64
         } else {
             0.0
         }
+    }
+}
+
+/// Linear-interpolating resampler + channel converter. Stateful so it can
+/// stitch samples across packet boundaries without clicks.
+struct Resampler {
+    src_sr: u32,
+    dst_sr: u32,
+    src_ch: usize,
+    dst_ch: usize,
+    /// Fractional source-frame position of the next output frame we owe,
+    /// relative to the START of the next input packet.
+    src_pos_frac: f64,
+    /// Last channel-converted source frame — kept so the first output frame
+    /// of a new packet can interpolate against it.
+    last_frame: Vec<f32>,
+    have_last: bool,
+}
+
+impl Resampler {
+    fn new(src_sr: u32, dst_sr: u32, src_ch: usize, dst_ch: usize) -> Self {
+        Self {
+            src_sr,
+            dst_sr,
+            src_ch,
+            dst_ch,
+            src_pos_frac: 0.0,
+            last_frame: vec![0.0; dst_ch.max(1)],
+            have_last: false,
+        }
+    }
+
+    fn convert_channels(&self, input: &[f32]) -> Vec<f32> {
+        if self.src_ch == self.dst_ch {
+            return input.to_vec();
+        }
+        let n_frames = input.len() / self.src_ch.max(1);
+        let mut out = Vec::with_capacity(n_frames * self.dst_ch);
+        for f in 0..n_frames {
+            for c in 0..self.dst_ch {
+                let s = if self.src_ch == 2 && self.dst_ch == 1 {
+                    (input[f * 2] + input[f * 2 + 1]) * 0.5
+                } else if self.src_ch == 1 {
+                    // Mono → broadcast to every output channel.
+                    input[f]
+                } else if c < self.src_ch {
+                    // Take first N source channels, drop the rest.
+                    input[f * self.src_ch + c]
+                } else if self.src_ch >= 2 {
+                    // Duplicate front L/R across missing outputs.
+                    input[f * self.src_ch + (c % 2)]
+                } else {
+                    0.0
+                };
+                out.push(s);
+            }
+        }
+        out
+    }
+
+    /// Resample the input (already channel-converted, interleaved at dst_ch)
+    /// from src_sr to dst_sr. Returns interleaved output at dst_sr / dst_ch.
+    fn resample(&mut self, input: Vec<f32>) -> Vec<f32> {
+        if self.src_sr == self.dst_sr {
+            if !input.is_empty() {
+                let n = input.len() / self.dst_ch.max(1);
+                for c in 0..self.dst_ch {
+                    self.last_frame[c] = input[(n - 1) * self.dst_ch + c];
+                }
+                self.have_last = true;
+            }
+            return input;
+        }
+        let n_frames = input.len() / self.dst_ch.max(1);
+        if n_frames == 0 {
+            return Vec::new();
+        }
+        let ratio = self.src_sr as f64 / self.dst_sr as f64;
+        let mut out = Vec::new();
+        let mut src_pos = self.src_pos_frac;
+        loop {
+            let idx = src_pos.floor() as isize;
+            let frac = (src_pos - src_pos.floor()) as f32;
+            let next_idx = idx + 1;
+            if next_idx < 0 || (next_idx as usize) >= n_frames {
+                break;
+            }
+            for c in 0..self.dst_ch {
+                let a = if idx < 0 {
+                    if self.have_last { self.last_frame[c] } else { 0.0 }
+                } else {
+                    input[(idx as usize) * self.dst_ch + c]
+                };
+                let b = input[(next_idx as usize) * self.dst_ch + c];
+                out.push(a * (1.0 - frac) + b * frac);
+            }
+            src_pos += ratio;
+        }
+        // Save state for the next packet.
+        self.src_pos_frac = src_pos - n_frames as f64;
+        for c in 0..self.dst_ch {
+            self.last_frame[c] = input[(n_frames - 1) * self.dst_ch + c];
+        }
+        self.have_last = true;
+        out
+    }
+
+    fn process(&mut self, input: &[f32]) -> Vec<f32> {
+        let ch_converted = self.convert_channels(input);
+        self.resample(ch_converted)
     }
 }
 
@@ -595,7 +711,6 @@ fn decode_one_packet(t: &mut Track) -> DecodeStep {
             return DecodeStep::EndOfStream;
         }
         Err(symphonia::core::errors::Error::ResetRequired) => {
-            // Rare, but symphonia asks us to rebuild the decoder — treat as EOF.
             return DecodeStep::EndOfStream;
         }
         Err(e) => return DecodeStep::Error(e.to_string()),
@@ -614,32 +729,33 @@ fn decode_one_packet(t: &mut Track) -> DecodeStep {
         .sample_buf
         .get_or_insert_with(|| SampleBuffer::<f32>::new(cap, spec));
     sample_buf.copy_interleaved_ref(audio_buf);
-    let samples = sample_buf.samples();
-    let frames = samples.len() / t.channels.max(1);
-    // Apply volume as we push. The cpal callback stays a plain copy.
+    let src_samples = sample_buf.samples();
+    // Convert channels + sample rate to what cpal is actually consuming.
+    let out_samples = t.resampler.process(src_samples);
+    if out_samples.is_empty() {
+        return DecodeStep::Pushed;
+    }
+    let out_frames = out_samples.len() / t.output_channels.max(1);
+    push_samples_with_volume(t, &out_samples);
+    t.produced_output_frames += out_frames as u64;
+    DecodeStep::Pushed
+}
+
+fn push_samples_with_volume(t: &Track, samples: &[f32]) {
     let vol = f32::from_bits(t.volume.load(Ordering::Relaxed));
-    // Push in chunks so the ring never blocks forever.
     let mut offset = 0;
     while offset < samples.len() {
-        // If asked to pause mid-push, back off briefly.
         if t.paused.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(20));
             continue;
         }
-        // Build a small volumed slice.
         let end = std::cmp::min(offset + 4096, samples.len());
         let chunk: Vec<f32> = samples[offset..end].iter().map(|s| s * vol).collect();
         match t.producer.write(&chunk) {
-            Ok(n) => {
-                offset += n;
-            }
-            Err(_) => {
-                thread::sleep(Duration::from_millis(5));
-            }
+            Ok(n) => offset += n,
+            Err(_) => thread::sleep(Duration::from_millis(5)),
         }
     }
-    t.produced_frames += frames as u64;
-    DecodeStep::Pushed
 }
 
 fn seek_track(t: &mut Track, pos_secs: f64) {
@@ -654,20 +770,18 @@ fn seek_track(t: &mut Track, pos_secs: f64) {
         },
     ) {
         Ok(seeked) => {
-            // Reset decoder and produced-frames counter.
             let _ = t.decoder.reset();
-            // Recompute produced_frames from the returned timestamp.
-            if let Some(tb) = t.time_base {
+            // Playhead is measured in output frames (what cpal has consumed).
+            let played_secs = if let Some(tb) = t.time_base {
                 let time = tb.calc_time(seeked.actual_ts);
-                let played_secs = time.seconds as f64 + time.frac;
-                t.produced_frames = (played_secs * t.sample_rate as f64) as u64;
+                time.seconds as f64 + time.frac
             } else {
-                t.produced_frames = (pos_secs * t.sample_rate as f64) as u64;
-            }
-            // Purge samples already queued for the old position.
-            // We approximate by draining the ring: rb has no clear(), so we
-            // sleep long enough for the callback to eat what's there.
-            // Alternative would be to rebuild the ring; we keep it simple.
+                pos_secs
+            };
+            t.produced_output_frames = (played_secs * t.output_sr as f64) as u64;
+            // The resampler holds stale interpolation state; reset it.
+            t.resampler.src_pos_frac = 0.0;
+            t.resampler.have_last = false;
         }
         Err(e) => {
             warn!(error = ?e, "seek failed");
@@ -676,15 +790,13 @@ fn seek_track(t: &mut Track, pos_secs: f64) {
 }
 
 fn drain_ring(t: &mut Track) {
-    let sr = t.sample_rate.max(1);
-    // Sleep in short bursts until the ring is (approximately) empty or 2 s max.
+    let sr = t.output_sr.max(1);
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         let free = t.ring_free_slots();
-        if free >= t.ring_capacity.saturating_sub(t.channels) {
+        if free >= t.ring_capacity.saturating_sub(t.output_channels) {
             break;
         }
-        // pending frames / sr = seconds of audio left
         let pending = t.ring_pending_frames();
         let sleep_ms = ((pending as f64 / sr as f64) * 1000.0) as u64;
         thread::sleep(Duration::from_millis(sleep_ms.min(200).max(10)));
@@ -792,12 +904,11 @@ fn load_track(
     volume: Arc<AtomicU32>,
     paused: Arc<AtomicBool>,
 ) -> Result<Track> {
-    // 1. Kick off the HTTP fetch — reads into an in-memory buffer.
+    // 1. Kick off the HTTP fetch.
     let source = spawn_streaming_source(&item.stream_url)?;
     let fetch_cancel = source.buf.clone();
 
-    // 2. Hand the source to symphonia. Hint the container from the item's
-    //    content-type when we have one; symphonia will still probe.
+    // 2. Probe with symphonia.
     let mut hint = Hint::new();
     if let Some(ext) = ext_from_content_type(&item.content_type) {
         hint.with_extension(ext);
@@ -814,9 +925,8 @@ fn load_track(
             &MetadataOptions::default(),
         )
         .context("symphonia probe failed")?;
-    let format = probed.format;
+    let mut format = probed.format;
 
-    // 3. Pick the first decodable audio track.
     let track_meta = format
         .tracks()
         .iter()
@@ -824,35 +934,62 @@ fn load_track(
         .cloned()
         .context("no decodable audio track")?;
     let track_id = track_meta.id;
-    let sample_rate = track_meta.codec_params.sample_rate.unwrap_or(44100);
-    let channels = track_meta
-        .codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(2);
     let time_base = track_meta.codec_params.time_base;
     let total_frames = track_meta.codec_params.n_frames;
-    let decoder = symphonia::default::get_codecs()
+    let mut decoder = symphonia::default::get_codecs()
         .make(&track_meta.codec_params, &DecoderOptions::default())
         .context("no decoder for this codec")?;
 
-    // 4. Open the cpal device — the audio device that will actually play sound.
+    // 3. Decode the FIRST packet so we learn the ACTUAL sample rate and
+    //    channel count from the decoder — the codec_params metadata can lie
+    //    for formats like HE-AAC (SBR doubles the effective rate) and some
+    //    Ogg streams where the header is optimistic.
+    let (source_sr, source_channels, first_samples) = prime_decoder(
+        &mut format,
+        decoder.as_mut(),
+        track_id,
+    )?;
+
+    // 4. Open cpal at the device's DEFAULT config — that's the rate/channels
+    //    the OS actually plays at. Asking cpal to reconfigure the device
+    //    silently fails on some backends, which is what causes slowed audio.
     let device = host
         .default_output_device()
         .context("no default audio output device")?;
-    let (stream, producer, ring, ring_capacity) =
-        build_output_stream(&device, sample_rate, channels, paused.clone())?;
+    let default_cfg = device
+        .default_output_config()
+        .context("no default output config")?;
+    let output_sr = default_cfg.sample_rate().0;
+    let output_channels = default_cfg.channels() as usize;
 
-    Ok(Track {
+    debug!(
+        source_sr,
+        source_channels,
+        output_sr,
+        output_channels,
+        codec = ?track_meta.codec_params.codec,
+        "opening cpal output"
+    );
+
+    let (stream, producer, ring, ring_capacity) =
+        build_output_stream(&device, &default_cfg, paused.clone())?;
+
+    let mut resampler = Resampler::new(source_sr, output_sr, source_channels, output_channels);
+
+    // 5. Prime the ring with the first packet's samples so playback starts
+    //    immediately instead of waiting a full worker tick.
+    let mut track = Track {
         format,
         decoder,
         track_id,
-        sample_rate,
-        channels,
+        source_sr,
+        output_sr,
+        output_channels,
         time_base,
         total_frames,
-        produced_frames: 0,
+        produced_output_frames: 0,
         sample_buf: None,
+        resampler: Resampler::new(source_sr, output_sr, source_channels, output_channels),
         producer,
         ring,
         ring_capacity,
@@ -862,7 +999,50 @@ fn load_track(
         volume,
         paused,
         _started: Instant::now(),
-    })
+    };
+    let first_out = resampler.process(&first_samples);
+    if !first_out.is_empty() {
+        let frames = first_out.len() / output_channels.max(1);
+        push_samples_with_volume(&track, &first_out);
+        track.produced_output_frames += frames as u64;
+    }
+    // Adopt the primed resampler state.
+    track.resampler = resampler;
+    Ok(track)
+}
+
+/// Decode packets until we get non-empty audio, then return its interleaved
+/// f32 samples along with the actual sample rate and channel count.
+fn prime_decoder(
+    format: &mut Box<dyn FormatReader>,
+    decoder: &mut dyn Decoder,
+    track_id: u32,
+) -> Result<(u32, usize, Vec<f32>)> {
+    loop {
+        let packet = format
+            .next_packet()
+            .context("no audio packet in stream")?;
+        if packet.track_id() != track_id {
+            continue;
+        }
+        let audio_buf = match decoder.decode(&packet) {
+            Ok(b) => b,
+            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
+            Err(e) => return Err(anyhow!("decode primer: {e}")),
+        };
+        let spec = *audio_buf.spec();
+        let cap = audio_buf.capacity() as u64;
+        if cap == 0 {
+            continue;
+        }
+        let mut sb = SampleBuffer::<f32>::new(cap, spec);
+        sb.copy_interleaved_ref(audio_buf);
+        let samples = sb.samples().to_vec();
+        if samples.is_empty() {
+            continue;
+        }
+        return Ok((spec.rate, spec.channels.count(), samples));
+    }
 }
 
 fn ext_from_content_type(ct: &str) -> Option<&'static str> {
@@ -883,65 +1063,34 @@ fn ext_from_content_type(ct: &str) -> Option<&'static str> {
 // cpal output stream
 // ---------------------------------------------------------------------------
 
-/// Open the default output device with a config that matches the source's
-/// sample rate and channel count when possible, and wire a ring buffer to a
-/// callback that drains it into the OS audio buffer.
+/// Open the default output device using its declared default config — the
+/// only config guaranteed to be honored by every cpal backend. The ring
+/// buffer stores samples already resampled + channel-converted to this spec,
+/// so the callback is a straight copy.
 fn build_output_stream(
     device: &cpal::Device,
-    source_sr: u32,
-    source_channels: usize,
+    default_cfg: &cpal::SupportedStreamConfig,
     paused: Arc<AtomicBool>,
 ) -> Result<(cpal::Stream, Producer<f32>, Arc<SpscRb<f32>>, usize)> {
-    let supported_configs = device
-        .supported_output_configs()
-        .context("querying output configs")?
-        .collect::<Vec<_>>();
-
-    // Prefer f32 output at the source's rate + channel count, but degrade
-    // gracefully — cpal will sample-rate-convert nothing for us, so this is
-    // "best effort" match.
-    let target_channels = source_channels as u16;
-    let target_sr = cpal::SampleRate(source_sr);
-    let picked = supported_configs
-        .iter()
-        .filter(|c| c.channels() == target_channels && c.sample_format() == SampleFormat::F32)
-        .find(|c| c.min_sample_rate() <= target_sr && c.max_sample_rate() >= target_sr)
-        .map(|c| c.with_sample_rate(target_sr))
-        .or_else(|| {
-            supported_configs
-                .iter()
-                .filter(|c| c.sample_format() == SampleFormat::F32)
-                .find(|c| c.min_sample_rate() <= target_sr && c.max_sample_rate() >= target_sr)
-                .map(|c| c.with_sample_rate(target_sr))
-        })
-        .or_else(|| {
-            supported_configs
-                .iter()
-                .find(|c| c.sample_format() == SampleFormat::F32)
-                .map(|c| c.with_max_sample_rate())
-        })
-        .context("no suitable f32 output config")?;
-
-    let sample_format = picked.sample_format();
-    let config: cpal::StreamConfig = picked.into();
+    if default_cfg.sample_format() != SampleFormat::F32 {
+        return Err(anyhow!(
+            "device default output is {:?}, only f32 is supported",
+            default_cfg.sample_format()
+        ));
+    }
+    let config: cpal::StreamConfig = default_cfg.clone().into();
+    let output_sr = config.sample_rate.0;
     let output_channels = config.channels as usize;
 
-    // A ring sized for ~250 ms of audio at the source rate. Larger = less
-    // underrun risk during garbage collection / OS pauses; smaller = tighter
-    // seek / pause latency.
-    let ring_frames = (source_sr as usize / 4).max(2048);
-    let ring_capacity = ring_frames * source_channels;
+    // ~250 ms of interleaved output-rate audio.
+    let ring_frames = (output_sr as usize / 4).max(2048);
+    let ring_capacity = ring_frames * output_channels;
     let rb = Arc::new(SpscRb::<f32>::new(ring_capacity));
     let producer = rb.producer();
     let consumer = rb.consumer();
 
-    if !matches!(sample_format, SampleFormat::F32) {
-        return Err(anyhow!("cpal picked a non-f32 output — unsupported"));
-    }
-
     let err_fn = |e| error!(error = %e, "cpal stream error");
 
-    // The callback is on the audio thread. It must be non-blocking.
     let stream = device
         .build_output_stream(
             &config,
@@ -952,59 +1101,9 @@ fn build_output_stream(
                     }
                     return;
                 }
-                // Source is `source_channels`-interleaved f32. Output may be
-                // 1..N-interleaved f32. Handle the common cases: match,
-                // mono→stereo, and stereo→mono. Anything else we duplicate
-                // channel 0 or drop extras.
-                if output_channels == source_channels {
-                    let n = consumer.read(out).unwrap_or(0);
-                    for s in &mut out[n..] {
-                        *s = 0.0;
-                    }
-                } else if source_channels == 2 && output_channels == 1 {
-                    // Mix L+R → mono.
-                    let mut scratch = vec![0.0f32; out.len() * 2];
-                    let n = consumer.read(&mut scratch).unwrap_or(0);
-                    let frames = n / 2;
-                    for i in 0..frames {
-                        out[i] = (scratch[i * 2] + scratch[i * 2 + 1]) * 0.5;
-                    }
-                    for s in &mut out[frames..] {
-                        *s = 0.0;
-                    }
-                } else if source_channels == 1 && output_channels >= 2 {
-                    // Mono → duplicate to every output channel.
-                    let mono_needed = out.len() / output_channels;
-                    let mut scratch = vec![0.0f32; mono_needed];
-                    let n = consumer.read(&mut scratch).unwrap_or(0);
-                    for i in 0..n {
-                        for ch in 0..output_channels {
-                            out[i * output_channels + ch] = scratch[i];
-                        }
-                    }
-                    for s in &mut out[n * output_channels..] {
-                        *s = 0.0;
-                    }
-                } else {
-                    // Fallback: copy min(channels), zero the rest per frame.
-                    let frames_out = out.len() / output_channels;
-                    let mut scratch = vec![0.0f32; frames_out * source_channels];
-                    let n = consumer.read(&mut scratch).unwrap_or(0);
-                    let common = source_channels.min(output_channels);
-                    let frames_read = n / source_channels;
-                    for f in 0..frames_read {
-                        for ch in 0..output_channels {
-                            let v = if ch < common {
-                                scratch[f * source_channels + ch]
-                            } else {
-                                0.0
-                            };
-                            out[f * output_channels + ch] = v;
-                        }
-                    }
-                    for s in &mut out[frames_read * output_channels..] {
-                        *s = 0.0;
-                    }
+                let n = consumer.read(out).unwrap_or(0);
+                for s in &mut out[n..] {
+                    *s = 0.0;
                 }
             },
             err_fn,

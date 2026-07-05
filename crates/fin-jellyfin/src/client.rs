@@ -732,3 +732,110 @@ impl JellyfinClient {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item_with_container(kind: &str, container: Option<&str>) -> BaseItem {
+        BaseItem {
+            id: "id-1".into(),
+            name: "n".into(),
+            type_: kind.into(),
+            album: None,
+            album_id: None,
+            album_artist: None,
+            artists: None,
+            series_name: None,
+            production_year: None,
+            run_time_ticks: None,
+            media_type: None,
+            container: container.map(str::to_string),
+            index_number: None,
+            parent_index_number: None,
+            image_tags: None,
+            is_folder: None,
+            overview: None,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // source_container
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn source_container_prefers_first_entry_of_comma_list() {
+        let it = item_with_container("Audio", Some("mp3,mpeg"));
+        assert_eq!(source_container(&it, true), "mp3");
+    }
+
+    #[test]
+    fn source_container_lowercases_and_trims() {
+        let it = item_with_container("Audio", Some("  FLAC  "));
+        assert_eq!(source_container(&it, true), "flac");
+    }
+
+    #[test]
+    fn source_container_falls_back_to_mp3_or_mp4() {
+        let audio = item_with_container("Audio", None);
+        assert_eq!(source_container(&audio, true), "mp3");
+        let video = item_with_container("Movie", None);
+        assert_eq!(source_container(&video, false), "mp4");
+    }
+
+    #[test]
+    fn source_container_falls_back_on_empty_string() {
+        let it = item_with_container("Audio", Some(""));
+        assert_eq!(source_container(&it, true), "mp3");
+    }
+
+    // ------------------------------------------------------------------
+    // content_type_for_url
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn content_type_maps_common_extensions() {
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/a/stream.mp3?foo=1"),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/a/stream.flac"),
+            "audio/flac"
+        );
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/a/stream.m4a"),
+            "audio/aac"
+        );
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/Videos/1/stream.mkv"),
+            "video/x-matroska"
+        );
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/Videos/1/main.m3u8"),
+            "application/vnd.apple.mpegurl"
+        );
+    }
+
+    #[test]
+    fn content_type_ignores_query_string() {
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/a/stream.opus?api_key=abc&Static=true"),
+            "audio/opus"
+        );
+    }
+
+    #[test]
+    fn content_type_falls_back_by_url_shape() {
+        // Unknown ext, but URL contains /Videos/ → video/mp4.
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/Videos/1/stream.unknown"),
+            "video/mp4"
+        );
+        // Otherwise → audio/mpeg.
+        assert_eq!(
+            JellyfinClient::content_type_for_url("http://x/whatever"),
+            "audio/mpeg"
+        );
+    }
+}

@@ -241,3 +241,150 @@ impl Config {
         self.servers.get(next)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn srv(name: &str) -> ServerConfig {
+        ServerConfig {
+            name: name.into(),
+            url: format!("http://{name}"),
+            user_id: "u".into(),
+            user_name: "user".into(),
+            access_token: "tok".into(),
+            device_id: "dev".into(),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // derive_server_name
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn derive_name_strips_scheme_and_path() {
+        assert_eq!(
+            derive_server_name("https://media.example.com:8096/path"),
+            "media.example.com"
+        );
+        assert_eq!(derive_server_name("http://192.168.1.42"), "192.168.1.42");
+        assert_eq!(derive_server_name("http://host:8096"), "host");
+    }
+
+    #[test]
+    fn derive_name_falls_back_when_input_is_empty() {
+        assert_eq!(derive_server_name(""), "server");
+        assert_eq!(derive_server_name("http://"), "server");
+    }
+
+    // ------------------------------------------------------------------
+    // Server management
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn add_or_update_inserts_new_and_marks_current() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        assert_eq!(cfg.servers.len(), 1);
+        assert_eq!(cfg.current_server.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn add_or_update_overwrites_existing_by_name() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        let mut updated = srv("a");
+        updated.access_token = "new-token".into();
+        cfg.add_or_update_server(updated);
+        assert_eq!(cfg.servers.len(), 1);
+        assert_eq!(cfg.servers[0].access_token, "new-token");
+    }
+
+    #[test]
+    fn switch_to_moves_current_pointer() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        cfg.add_or_update_server(srv("b"));
+        cfg.switch_to("a").unwrap();
+        assert_eq!(cfg.current_server.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn switch_to_unknown_server_errors() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        assert!(cfg.switch_to("missing").is_err());
+        // Current unchanged.
+        assert_eq!(cfg.current_server.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn remove_current_falls_back_to_first_remaining() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        cfg.add_or_update_server(srv("b"));
+        cfg.add_or_update_server(srv("c"));
+        cfg.switch_to("b").unwrap();
+        cfg.remove_server("b").unwrap();
+        assert_eq!(
+            cfg.servers.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+            vec!["a", "c"]
+        );
+        assert_eq!(cfg.current_server.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn remove_non_current_keeps_current_untouched() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        cfg.add_or_update_server(srv("b"));
+        // add_or_update_server makes the *added* server current; assert current is b, then remove a.
+        assert_eq!(cfg.current_server.as_deref(), Some("b"));
+        cfg.remove_server("a").unwrap();
+        assert_eq!(cfg.current_server.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn remove_last_server_clears_current() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        cfg.remove_server("a").unwrap();
+        assert!(cfg.servers.is_empty());
+        assert_eq!(cfg.current_server, None);
+    }
+
+    #[test]
+    fn remove_unknown_returns_err() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        assert!(cfg.remove_server("missing").is_err());
+    }
+
+    #[test]
+    fn cycle_next_wraps_around() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("a"));
+        cfg.add_or_update_server(srv("b"));
+        cfg.add_or_update_server(srv("c"));
+        cfg.switch_to("a").unwrap();
+        assert_eq!(cfg.cycle_next().map(|s| s.name.clone()), Some("b".into()));
+        assert_eq!(cfg.cycle_next().map(|s| s.name.clone()), Some("c".into()));
+        // Wraps back to the first.
+        assert_eq!(cfg.cycle_next().map(|s| s.name.clone()), Some("a".into()));
+    }
+
+    #[test]
+    fn cycle_next_on_empty_returns_none() {
+        let mut cfg = Config::default();
+        assert!(cfg.cycle_next().is_none());
+    }
+
+    #[test]
+    fn find_server_returns_by_exact_name() {
+        let mut cfg = Config::default();
+        cfg.add_or_update_server(srv("prod"));
+        cfg.add_or_update_server(srv("dev"));
+        assert!(cfg.find_server("prod").is_some());
+        assert!(cfg.find_server("nope").is_none());
+    }
+}

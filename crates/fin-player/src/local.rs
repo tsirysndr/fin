@@ -250,3 +250,70 @@ impl Renderer for LocalRenderer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn audio(id: &str) -> QueueItem {
+        QueueItem {
+            id: id.into(),
+            title: id.into(),
+            subtitle: String::new(),
+            stream_url: format!("http://example/{id}.flac"),
+            image_url: None,
+            duration_secs: Some(120),
+            is_video: false,
+            content_type: "audio/flac".into(),
+        }
+    }
+
+    fn video(id: &str) -> QueueItem {
+        QueueItem {
+            id: id.into(),
+            title: id.into(),
+            subtitle: String::new(),
+            stream_url: format!("http://example/{id}.mp4"),
+            image_url: None,
+            duration_secs: Some(600),
+            is_video: true,
+            content_type: "video/mp4".into(),
+        }
+    }
+
+    #[test]
+    fn dispatch_picks_kind_of_item_at_start_index() {
+        let items = vec![audio("a"), video("b"), audio("c")];
+        assert_eq!(LocalRenderer::dispatch_target(&items, 0), Active::Audio);
+        assert_eq!(LocalRenderer::dispatch_target(&items, 1), Active::Video);
+        assert_eq!(LocalRenderer::dispatch_target(&items, 2), Active::Audio);
+    }
+
+    #[test]
+    fn dispatch_on_empty_or_out_of_range_returns_none() {
+        assert_eq!(LocalRenderer::dispatch_target(&[], 0), Active::None);
+        let items = vec![audio("a")];
+        assert_eq!(LocalRenderer::dispatch_target(&items, 5), Active::None);
+    }
+
+    #[test]
+    fn filter_kind_keeps_only_matching_items() {
+        let mixed = vec![audio("a"), video("b"), audio("c"), video("d")];
+        let audio_only = filter_kind(mixed.clone(), false);
+        assert_eq!(
+            audio_only.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+            vec!["a", "c"]
+        );
+        let video_only = filter_kind(mixed, true);
+        assert_eq!(
+            video_only.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+            vec!["b", "d"]
+        );
+    }
+
+    #[test]
+    fn filter_kind_on_empty_returns_empty() {
+        assert!(filter_kind(vec![], false).is_empty());
+        assert!(filter_kind(vec![], true).is_empty());
+    }
+}

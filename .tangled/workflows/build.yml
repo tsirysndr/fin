@@ -2,16 +2,15 @@ when:
   - event: ["push", "pull_request"]
     branch: main
 
-engine: nixery
+engine: nixos
 
 dependencies:
-  nixpkgs:
-    - cargo
-    - rustc
-    - rustfmt
-    - gcc
-    - pkg-config
-    - alsa-lib
+  - cargo
+  - rustc
+  - rustfmt
+  - gcc
+  - pkg-config
+  - alsa-lib
 
 steps:
   - name: nix build

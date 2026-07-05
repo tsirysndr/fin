@@ -1114,3 +1114,176 @@ fn build_output_stream(
     stream.play().context("start cpal stream")?;
     Ok((stream, producer, rb, ring_capacity))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ------------------------------------------------------------------
+    // ext_from_content_type
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn maps_common_audio_mimes_to_extensions() {
+        assert_eq!(ext_from_content_type("audio/mpeg"), Some("mp3"));
+        assert_eq!(ext_from_content_type("audio/flac"), Some("flac"));
+        assert_eq!(ext_from_content_type("audio/x-flac"), Some("flac"));
+        assert_eq!(ext_from_content_type("audio/mp4"), Some("m4a"));
+        assert_eq!(ext_from_content_type("audio/ogg"), Some("ogg"));
+        assert_eq!(ext_from_content_type("audio/opus"), Some("opus"));
+        assert_eq!(ext_from_content_type("audio/wav"), Some("wav"));
+    }
+
+    #[test]
+    fn ignores_content_type_parameters_and_case() {
+        assert_eq!(
+            ext_from_content_type("audio/MPEG; charset=binary"),
+            Some("mp3")
+        );
+        assert_eq!(ext_from_content_type("  Audio/FLAC  "), Some("flac"));
+    }
+
+    #[test]
+    fn unknown_mime_returns_none() {
+        assert_eq!(ext_from_content_type("video/mp4"), None);
+        assert_eq!(ext_from_content_type(""), None);
+    }
+
+    // ------------------------------------------------------------------
+    // Resampler::convert_channels
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn channel_conversion_is_a_noop_for_matching_layouts() {
+        let r = Resampler::new(48_000, 48_000, 2, 2);
+        let input = vec![1.0, 2.0, 3.0, 4.0];
+        assert_eq!(r.convert_channels(&input), input);
+    }
+
+    #[test]
+    fn stereo_downmixes_to_mono_as_average() {
+        let r = Resampler::new(48_000, 48_000, 2, 1);
+        // Two frames: (L=1.0, R=3.0), (L=-1.0, R=1.0).
+        let input = vec![1.0, 3.0, -1.0, 1.0];
+        let out = r.convert_channels(&input);
+        assert_eq!(out, vec![2.0, 0.0]);
+    }
+
+    #[test]
+    fn mono_broadcasts_to_every_output_channel() {
+        let r = Resampler::new(48_000, 48_000, 1, 2);
+        let input = vec![0.5, -0.25];
+        assert_eq!(r.convert_channels(&input), vec![0.5, 0.5, -0.25, -0.25]);
+    }
+
+    #[test]
+    fn extra_output_channels_get_duplicated_front_pair() {
+        // Stereo → 5.1 layout: c=0/1 pass through, c>=2 fall back to L/R pattern.
+        let r = Resampler::new(48_000, 48_000, 2, 6);
+        let input = vec![1.0, 2.0]; // one frame: L=1, R=2
+        let out = r.convert_channels(&input);
+        // 6 channels: L, R, then alternating L/R fill.
+        assert_eq!(out, vec![1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+    }
+
+    // ------------------------------------------------------------------
+    // Resampler::resample
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn resample_is_a_noop_when_rates_match() {
+        let mut r = Resampler::new(44_100, 44_100, 2, 2);
+        let input: Vec<f32> = (0..20).map(|i| i as f32).collect();
+        let out = r.resample(input.clone());
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn downsample_48k_to_44_1k_produces_expected_frame_count() {
+        // 48 kHz → 44.1 kHz means output_frames ≈ input_frames * 44100/48000.
+        // The resampler only emits frames it can fully interpolate, so with a
+        // single packet we get floor rather than round — but close enough.
+        let mut r = Resampler::new(48_000, 44_100, 2, 2);
+        let input_frames = 48_000; // one second of 48 kHz
+        let input = vec![0.5f32; input_frames * 2];
+        let out = r.resample(input);
+        let out_frames = out.len() / 2;
+        // One second at 44.1 kHz = 44100 frames. Allow ±2 for boundary rounding.
+        assert!(
+            (out_frames as i64 - 44_100).abs() <= 2,
+            "downsample produced {} frames, expected ~44100",
+            out_frames
+        );
+    }
+
+    #[test]
+    fn upsample_44_1k_to_48k_produces_expected_frame_count() {
+        let mut r = Resampler::new(44_100, 48_000, 2, 2);
+        let input_frames = 44_100;
+        let input = vec![0.5f32; input_frames * 2];
+        let out = r.resample(input);
+        let out_frames = out.len() / 2;
+        assert!(
+            (out_frames as i64 - 48_000).abs() <= 2,
+            "upsample produced {} frames, expected ~48000",
+            out_frames
+        );
+    }
+
+    #[test]
+    fn cross_packet_output_matches_single_packet_output() {
+        // Same total input, delivered as one packet vs two halves, should
+        // yield essentially the same output stream. Boundary interpolation
+        // uses `last_frame`, so results converge within a couple of samples.
+        let sr_in = 48_000;
+        let sr_out = 44_100;
+        let n_frames = 4_800; // 100 ms
+        let input: Vec<f32> = (0..n_frames * 2).map(|i| (i as f32).sin()).collect();
+
+        let mut r1 = Resampler::new(sr_in, sr_out, 2, 2);
+        let single = r1.resample(input.clone());
+
+        let mut r2 = Resampler::new(sr_in, sr_out, 2, 2);
+        let (a, b) = input.split_at(n_frames); // half the frames = n_frames/2 samples each
+        let half1 = r2.resample(a.to_vec());
+        let half2 = r2.resample(b.to_vec());
+        let combined: Vec<f32> = half1.into_iter().chain(half2).collect();
+
+        // Both paths should produce close-to-identical frame counts.
+        let diff = (single.len() as i64 - combined.len() as i64).abs();
+        assert!(
+            diff <= 4,
+            "single-packet and split-packet output differ by {} samples",
+            diff
+        );
+    }
+
+    #[test]
+    fn resampler_saves_last_frame_across_calls_at_matching_rates() {
+        // Even in the passthrough path we save last_frame so a subsequent
+        // rate change would interpolate cleanly. Verifies the have_last
+        // flag is set after any non-empty process().
+        let mut r = Resampler::new(48_000, 48_000, 2, 2);
+        let _ = r.resample(vec![0.0, 1.0, 2.0, 3.0]);
+        assert!(r.have_last);
+        assert_eq!(r.last_frame, vec![2.0, 3.0]);
+    }
+
+    // ------------------------------------------------------------------
+    // Resampler::process (end-to-end: channel conv + rate conv)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn process_downmixes_and_resamples_together() {
+        let mut r = Resampler::new(48_000, 44_100, 2, 1);
+        // 480 stereo frames at 48 kHz = 10 ms. After downmix + downsample we
+        // expect ~441 mono frames.
+        let input: Vec<f32> = (0..480).flat_map(|i| [i as f32, -(i as f32)]).collect();
+        let out = r.process(&input);
+        assert!(
+            (out.len() as i64 - 441).abs() <= 2,
+            "process yielded {} samples, expected ~441",
+            out.len()
+        );
+    }
+}

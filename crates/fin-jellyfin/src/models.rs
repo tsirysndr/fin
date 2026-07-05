@@ -266,3 +266,124 @@ pub struct UserViewsResult {
 
 pub type Playlist = BaseItem;
 pub type PlaylistItem = BaseItem;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> BaseItem {
+        BaseItem {
+            id: "id".into(),
+            name: "n".into(),
+            type_: "Audio".into(),
+            album: None,
+            album_id: None,
+            album_artist: None,
+            artists: None,
+            series_name: None,
+            production_year: None,
+            run_time_ticks: None,
+            media_type: None,
+            container: None,
+            index_number: None,
+            parent_index_number: None,
+            image_tags: None,
+            is_folder: None,
+            overview: None,
+        }
+    }
+
+    #[test]
+    fn item_kind_parses_known_variants() {
+        assert_eq!(ItemKind::parse("Audio"), ItemKind::Audio);
+        assert_eq!(ItemKind::parse("MusicAlbum"), ItemKind::MusicAlbum);
+        assert_eq!(ItemKind::parse("Series"), ItemKind::Series);
+        assert_eq!(ItemKind::parse("CollectionFolder"), ItemKind::Folder);
+        assert_eq!(ItemKind::parse("nonsense"), ItemKind::Other);
+    }
+
+    #[test]
+    fn item_kind_audio_and_video_classifiers() {
+        assert!(ItemKind::Audio.is_audio());
+        assert!(ItemKind::MusicAlbum.is_audio());
+        assert!(!ItemKind::Movie.is_audio());
+        assert!(ItemKind::Movie.is_video());
+        assert!(ItemKind::Episode.is_video());
+        assert!(!ItemKind::Audio.is_video());
+    }
+
+    #[test]
+    fn item_kind_is_playable_matches_leaves_only() {
+        assert!(ItemKind::Audio.is_playable());
+        assert!(ItemKind::Movie.is_playable());
+        assert!(ItemKind::Episode.is_playable());
+        // Containers are drilled-into, not directly played.
+        assert!(!ItemKind::MusicAlbum.is_playable());
+        assert!(!ItemKind::Series.is_playable());
+        assert!(!ItemKind::Folder.is_playable());
+    }
+
+    #[test]
+    fn duration_secs_converts_ticks() {
+        let mut it = base();
+        // 10_000_000 ticks per second in Jellyfin.
+        it.run_time_ticks = Some(45 * 10_000_000);
+        assert_eq!(it.duration_secs(), Some(45));
+        it.run_time_ticks = None;
+        assert_eq!(it.duration_secs(), None);
+    }
+
+    #[test]
+    fn audio_subtitle_combines_artists_and_album() {
+        let mut it = base();
+        it.artists = Some(vec!["Foo".into(), "Bar".into()]);
+        it.album = Some("The Album".into());
+        assert_eq!(it.subtitle(), "Foo, Bar — The Album");
+    }
+
+    #[test]
+    fn audio_subtitle_falls_back_to_album_artist_when_no_artists() {
+        let mut it = base();
+        it.album_artist = Some("Solo".into());
+        it.album = Some("The Album".into());
+        assert_eq!(it.subtitle(), "Solo — The Album");
+    }
+
+    #[test]
+    fn audio_subtitle_handles_missing_fields() {
+        let mut it = base();
+        it.artists = Some(vec![]);
+        assert_eq!(it.subtitle(), "");
+
+        let mut it = base();
+        it.album = Some("Just Album".into());
+        assert_eq!(it.subtitle(), "Just Album");
+    }
+
+    #[test]
+    fn album_subtitle_uses_album_artist() {
+        let mut it = base();
+        it.type_ = "MusicAlbum".into();
+        it.album_artist = Some("Grace Jones".into());
+        assert_eq!(it.subtitle(), "Grace Jones");
+    }
+
+    #[test]
+    fn movie_subtitle_is_production_year() {
+        let mut it = base();
+        it.type_ = "Movie".into();
+        it.production_year = Some(1999);
+        assert_eq!(it.subtitle(), "1999");
+    }
+
+    #[test]
+    fn episode_subtitle_formats_season_episode() {
+        let mut it = base();
+        it.type_ = "Episode".into();
+        it.parent_index_number = Some(2);
+        it.index_number = Some(7);
+        it.series_name = Some("A Series".into());
+        // The format is "SxxExx — series name"; just check the core prefix.
+        assert!(it.subtitle().starts_with("S02E07"));
+    }
+}

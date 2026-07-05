@@ -136,3 +136,160 @@ impl PlaybackQueue {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(id: &str) -> QueueItem {
+        QueueItem {
+            id: id.into(),
+            title: id.into(),
+            subtitle: String::new(),
+            stream_url: format!("http://example/{id}"),
+            image_url: None,
+            duration_secs: Some(180),
+            is_video: false,
+            content_type: "audio/mpeg".into(),
+        }
+    }
+
+    fn ids(q: &PlaybackQueue) -> Vec<String> {
+        q.items().into_iter().map(|i| i.id).collect()
+    }
+
+    #[test]
+    fn empty_queue_has_no_current() {
+        let q = PlaybackQueue::new();
+        assert!(q.is_empty());
+        assert_eq!(q.len(), 0);
+        assert_eq!(q.current_index(), None);
+        assert!(q.current().is_none());
+    }
+
+    #[test]
+    fn replace_sets_index_and_clamps() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 1);
+        assert_eq!(q.current_index(), Some(1));
+        assert_eq!(q.current().unwrap().id, "b");
+        // Out-of-range start clamps to the last valid index.
+        q.replace(vec![item("x"), item("y")], 99);
+        assert_eq!(q.current_index(), Some(1));
+        assert_eq!(q.current().unwrap().id, "y");
+    }
+
+    #[test]
+    fn replace_with_empty_clears_index() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a")], 0);
+        q.replace(vec![], 0);
+        assert_eq!(q.current_index(), None);
+        assert!(q.current().is_none());
+    }
+
+    #[test]
+    fn append_sets_index_when_starting_empty() {
+        let q = PlaybackQueue::new();
+        q.append(vec![item("a"), item("b")]);
+        assert_eq!(q.current_index(), Some(0));
+        // Appending again keeps the current index.
+        q.append(vec![item("c")]);
+        assert_eq!(q.current_index(), Some(0));
+        assert_eq!(ids(&q), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn insert_next_places_items_after_current() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 1);
+        q.insert_next(vec![item("x"), item("y")]);
+        assert_eq!(ids(&q), vec!["a", "b", "x", "y", "c"]);
+        // Current stays on "b".
+        assert_eq!(q.current().unwrap().id, "b");
+    }
+
+    #[test]
+    fn insert_next_into_empty_becomes_first() {
+        let q = PlaybackQueue::new();
+        q.insert_next(vec![item("a"), item("b")]);
+        assert_eq!(ids(&q), vec!["a", "b"]);
+        assert_eq!(q.current_index(), Some(0));
+    }
+
+    #[test]
+    fn advance_walks_to_end_then_stops() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 0);
+        assert_eq!(q.advance(), Some(1));
+        assert_eq!(q.advance(), Some(2));
+        assert_eq!(q.advance(), None);
+        // Once past the end, current becomes None.
+        assert_eq!(q.current_index(), None);
+    }
+
+    #[test]
+    fn back_walks_to_zero_and_stays() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 2);
+        assert_eq!(q.back(), Some(1));
+        assert_eq!(q.back(), Some(0));
+        assert_eq!(q.back(), Some(0));
+    }
+
+    #[test]
+    fn set_index_within_bounds_moves_cursor() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 0);
+        q.set_index(2);
+        assert_eq!(q.current().unwrap().id, "c");
+        // Out-of-bounds set_index is a no-op.
+        q.set_index(99);
+        assert_eq!(q.current().unwrap().id, "c");
+    }
+
+    #[test]
+    fn remove_before_current_shifts_index_down() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 2);
+        q.remove(0);
+        assert_eq!(ids(&q), vec!["b", "c"]);
+        assert_eq!(q.current().unwrap().id, "c");
+    }
+
+    #[test]
+    fn remove_current_last_clamps() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 1);
+        q.remove(1);
+        assert_eq!(ids(&q), vec!["a"]);
+        assert_eq!(q.current().unwrap().id, "a");
+    }
+
+    #[test]
+    fn remove_only_item_clears_index() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a")], 0);
+        q.remove(0);
+        assert!(q.is_empty());
+        assert_eq!(q.current_index(), None);
+    }
+
+    #[test]
+    fn remove_out_of_bounds_is_noop() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 0);
+        q.remove(99);
+        assert_eq!(ids(&q), vec!["a", "b"]);
+        assert_eq!(q.current_index(), Some(0));
+    }
+
+    #[test]
+    fn clear_resets_everything() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 1);
+        q.clear();
+        assert!(q.is_empty());
+        assert_eq!(q.current_index(), None);
+    }
+}

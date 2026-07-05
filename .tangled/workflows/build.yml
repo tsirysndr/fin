@@ -2,8 +2,7 @@ when:
   - event: ["push", "pull_request"]
     branch: main
 
-engine: microvm
-image: nixos
+engine: nixery
 
 dependencies:
   - cargo

@@ -22,6 +22,7 @@ rust_cast.workspace = true
 reqwest = { workspace = true, features = ["stream", "blocking"] }
 url.workspace = true
 fin-jellyfin.workspace = true
+fin-config.workspace = true
 
 # Local audio-only playback: fetch → symphonia decode → cpal output.
 # mpv is only used for video; audio never touches mpv.

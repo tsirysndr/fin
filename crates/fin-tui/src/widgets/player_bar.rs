@@ -128,9 +128,20 @@ impl<'a> Widget for PlayerBar<'a> {
                 Style::default().fg(Palette::MUTED)
             },
         );
+        let rg_span = if self.state.replaygain.mode.is_active() {
+            Span::styled(
+                format!("RG:{} ", self.state.replaygain.mode.label()),
+                Style::default()
+                    .fg(Palette::HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw("")
+        };
         let right_line = Line::from(vec![
             shuffle_span,
             repeat_span,
+            rg_span,
             Span::styled(
                 format!("♪ {}%   ", (self.state.volume * 100.0) as i32),
                 Style::default().fg(Palette::HIGHLIGHT),

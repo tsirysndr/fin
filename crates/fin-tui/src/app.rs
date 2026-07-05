@@ -1059,6 +1059,24 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let _ = renderer.stop().await;
             app.set_status("Queue cleared.");
         }
+        // ReplayGain: `g` cycles off → track → album → off.
+        (KeyCode::Char('g'), _) => {
+            let mut new_settings = {
+                let cfg = app.config.lock();
+                cfg.replaygain
+            };
+            new_settings.mode = new_settings.mode.next();
+            let renderer = app.renderer.lock().clone();
+            if let Err(e) = renderer.set_replaygain(new_settings).await {
+                app.set_status(format!("replaygain: {}", e));
+            } else {
+                let mut cfg = app.config.lock();
+                cfg.replaygain = new_settings;
+                let _ = cfg.save();
+                drop(cfg);
+                app.set_status(format!("ReplayGain: {}", new_settings.mode.label()));
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -1427,7 +1445,7 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(4)])
+        .constraints([Constraint::Length(8), Constraint::Min(4)])
         .split(area);
 
     // Top card — global settings.
@@ -1447,6 +1465,22 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
         Line::from(vec![
             Span::styled("  Last UPnP     ", title_style()),
             Span::styled(last_upnp, Style::default().fg(Palette::HIGHLIGHT)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ReplayGain    ", title_style()),
+            Span::styled(cfg_snapshot.replaygain.mode.label(), accent_style()),
+            Span::styled(
+                format!(
+                    "   preamp {:+.1} dB   clip-guard {}   (press g to cycle)",
+                    cfg_snapshot.replaygain.preamp_db,
+                    if cfg_snapshot.replaygain.prevent_clip {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                ),
+                muted_style(),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Config File   ", title_style()),
@@ -1557,7 +1591,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
+    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

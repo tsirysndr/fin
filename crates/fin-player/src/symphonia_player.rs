@@ -29,6 +29,7 @@ use tracing::{debug, error, warn};
 use crate::queue::{PlaybackQueue, QueueItem};
 use crate::persist::{PersistedQueue, Persister};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
+use crate::replaygain::{ReplayGainInfo, ReplayGainSettings};
 
 /// A local, audio-only renderer. Streams the HTTP body, decodes with symphonia,
 /// and pushes float samples to the default cpal output device.
@@ -64,6 +65,7 @@ enum PlayerCommand {
     /// snapshot. Doesn't start playback — the next Resume/Play does.
     Restore(PersistedQueue),
     RemoveAt(usize),
+    SetReplayGain(ReplayGainSettings),
     Quit,
 }
 
@@ -179,6 +181,10 @@ impl Renderer for SymphoniaPlayer {
 
     async fn remove_from_queue(&self, index: usize) -> Result<()> {
         self.send(PlayerCommand::RemoveAt(index))
+    }
+
+    async fn set_replaygain(&self, settings: ReplayGainSettings) -> Result<()> {
+        self.send(PlayerCommand::SetReplayGain(settings))
     }
 
     fn state(&self) -> PlaybackState {
@@ -413,6 +419,10 @@ struct Track {
     paused: Arc<AtomicBool>,
     // Instant we started the current track — used only as a tie-breaker in logs.
     _started: Instant,
+    // ReplayGain tags read from the track, plus the linear gain that
+    // currently-active settings resolve to. Recomputed on SetReplayGain.
+    replaygain_info: ReplayGainInfo,
+    replaygain_linear: f32,
 }
 
 impl Track {
@@ -573,6 +583,8 @@ fn run_worker(
     let mut pending_seek: Option<f64> = None;
     // Rate-limit position-only persist writes.
     let mut last_position_persist = Instant::now();
+    // Current ReplayGain settings — applied to each track we load.
+    let mut rg_settings = ReplayGainSettings::default();
 
     'main: loop {
         // Consume commands. If nothing's playing, block; otherwise poll.
@@ -605,6 +617,7 @@ fn run_worker(
                             &state,
                             &queue,
                             &mut pending_seek,
+                            rg_settings,
                         );
                     } else {
                         mark_idle(&state);
@@ -625,6 +638,7 @@ fn run_worker(
                                 &state,
                                 &queue,
                                 &mut pending_seek,
+                                rg_settings,
                             );
                         }
                     }
@@ -644,6 +658,7 @@ fn run_worker(
                                 &state,
                                 &queue,
                                 &mut pending_seek,
+                                rg_settings,
                             );
                         }
                     }
@@ -673,6 +688,7 @@ fn run_worker(
                                 &state,
                                 &queue,
                                 &mut pending_seek,
+                                rg_settings,
                             );
                         }
                     }
@@ -708,6 +724,7 @@ fn run_worker(
                             &state,
                             &queue,
                             &mut pending_seek,
+                            rg_settings,
                         );
                     } else {
                         mark_idle(&state);
@@ -727,6 +744,7 @@ fn run_worker(
                             &state,
                             &queue,
                             &mut pending_seek,
+                            rg_settings,
                         );
                     } else {
                         mark_idle(&state);
@@ -797,6 +815,14 @@ fn run_worker(
                     drop(s);
                     // Do NOT overwrite the snapshot on restore itself.
                 }
+                PlayerCommand::SetReplayGain(settings) => {
+                    rg_settings = settings;
+                    if let Some(ref mut t) = track {
+                        t.replaygain_linear = t.replaygain_info.linear_gain(settings);
+                    }
+                    state.lock().replaygain = settings;
+                    persist_now(&persister, &queue, &state);
+                }
                 PlayerCommand::RemoveAt(idx) => {
                     let cur = queue.current_index();
                     let removing_current = cur == Some(idx);
@@ -816,6 +842,7 @@ fn run_worker(
                                 &state,
                                 &queue,
                                 &mut pending_seek,
+                                rg_settings,
                             );
                         } else {
                             mark_idle(&state);
@@ -873,6 +900,7 @@ fn run_worker(
                             &state,
                             &queue,
                             &mut pending_seek,
+                            rg_settings,
                         );
                     } else {
                         mark_idle(&state);
@@ -893,6 +921,7 @@ fn run_worker(
                             &state,
                             &queue,
                             &mut pending_seek,
+                            rg_settings,
                         );
                     } else {
                         mark_idle(&state);
@@ -955,7 +984,11 @@ fn decode_one_packet(t: &mut Track) -> DecodeStep {
 }
 
 fn push_samples_with_volume(t: &Track, samples: &[f32]) {
+    // Effective scale = user volume × ReplayGain linear multiplier.
+    // Combining them here keeps the sample loop a single multiply, and
+    // "volume" still behaves as a hard cap the user can always reach for.
     let vol = f32::from_bits(t.volume.load(Ordering::Relaxed));
+    let effective = vol * t.replaygain_linear;
     let mut offset = 0;
     while offset < samples.len() {
         if t.paused.load(Ordering::Relaxed) {
@@ -963,7 +996,7 @@ fn push_samples_with_volume(t: &Track, samples: &[f32]) {
             continue;
         }
         let end = std::cmp::min(offset + 4096, samples.len());
-        let chunk: Vec<f32> = samples[offset..end].iter().map(|s| s * vol).collect();
+        let chunk: Vec<f32> = samples[offset..end].iter().map(|s| s * effective).collect();
         match t.producer.write(&chunk) {
             Ok(n) => offset += n,
             Err(_) => thread::sleep(Duration::from_millis(5)),
@@ -1082,8 +1115,9 @@ fn load_and_maybe_seek(
     state: &Arc<Mutex<PlaybackState>>,
     queue: &PlaybackQueue,
     pending_seek: &mut Option<f64>,
+    rg_settings: ReplayGainSettings,
 ) -> Option<Track> {
-    let mut track = try_load_track(host, item, volume, paused, state, queue)?;
+    let mut track = try_load_track(host, item, volume, paused, state, queue, rg_settings)?;
     if let Some(secs) = pending_seek.take() {
         if secs > 0.0 {
             seek_track(&mut track, secs);
@@ -1113,6 +1147,7 @@ fn try_load_track(
     paused: &Arc<AtomicBool>,
     state: &Arc<Mutex<PlaybackState>>,
     queue: &PlaybackQueue,
+    rg_settings: ReplayGainSettings,
 ) -> Option<Track> {
     {
         let mut s = state.lock();
@@ -1121,7 +1156,7 @@ fn try_load_track(
         s.position_secs = 0.0;
         s.duration_secs = item.duration_secs.map(|d| d as f64).unwrap_or(0.0);
     }
-    match load_track(host, item.clone(), volume.clone(), paused.clone()) {
+    match load_track(host, item.clone(), volume.clone(), paused.clone(), rg_settings) {
         Ok(t) => {
             let mut s = state.lock();
             s.status = PlaybackStatus::Playing;
@@ -1143,7 +1178,13 @@ fn try_load_track(
                         mark_idle(state);
                         return None;
                     }
-                    Some(next) => match load_track(host, next.clone(), volume.clone(), paused.clone()) {
+                    Some(next) => match load_track(
+                        host,
+                        next.clone(),
+                        volume.clone(),
+                        paused.clone(),
+                        rg_settings,
+                    ) {
                         Ok(t) => {
                             let mut s = state.lock();
                             s.status = PlaybackStatus::Playing;
@@ -1164,6 +1205,7 @@ fn load_track(
     item: QueueItem,
     volume: Arc<AtomicU32>,
     paused: Arc<AtomicBool>,
+    rg_settings: ReplayGainSettings,
 ) -> Result<Track> {
     // 1. Kick off the HTTP fetch.
     let source = spawn_streaming_source(&item.stream_url)?;
@@ -1237,6 +1279,19 @@ fn load_track(
 
     let mut resampler = Resampler::new(source_sr, output_sr, source_channels, output_channels);
 
+    // 4b. Read whatever ReplayGain tags this track carries. Done AFTER the
+    //     first-packet decode primer above — several formats only expose
+    //     metadata once the first packet has flown by.
+    let replaygain_info = ReplayGainInfo::extract_from(&mut format);
+    let replaygain_linear = replaygain_info.linear_gain(rg_settings);
+    debug!(
+        title = %item.title,
+        track_gain = ?replaygain_info.track_gain_db,
+        album_gain = ?replaygain_info.album_gain_db,
+        linear = replaygain_linear,
+        "replaygain resolved"
+    );
+
     // 5. Prime the ring with the first packet's samples so playback starts
     //    immediately instead of waiting a full worker tick.
     let mut track = Track {
@@ -1260,6 +1315,8 @@ fn load_track(
         volume,
         paused,
         _started: Instant::now(),
+        replaygain_info,
+        replaygain_linear,
     };
     let first_out = resampler.process(&first_samples);
     if !first_out.is_empty() {

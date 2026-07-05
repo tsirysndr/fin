@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::persist::PersistedQueue;
 use crate::queue::{QueueItem, RepeatMode};
+use crate::replaygain::ReplayGainSettings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -27,6 +28,11 @@ pub struct PlaybackState {
     pub shuffle: bool,
     #[serde(default)]
     pub repeat: RepeatMode,
+    /// Whatever ReplayGain settings the renderer is currently honoring —
+    /// mirrored on state so the TUI can show a badge without a separate
+    /// query path.
+    #[serde(default)]
+    pub replaygain: ReplayGainSettings,
 }
 
 impl Default for PlaybackState {
@@ -41,6 +47,7 @@ impl Default for PlaybackState {
             current_index: None,
             shuffle: false,
             repeat: RepeatMode::Off,
+            replaygain: ReplayGainSettings::default(),
         }
     }
 }
@@ -111,6 +118,13 @@ pub trait Renderer: Send + Sync {
     /// in which case playback advances to the next entry (or stops if the
     /// queue is now empty). Default is a no-op.
     async fn remove_from_queue(&self, _index: usize) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Update ReplayGain settings (mode, preamp, clip prevention). Non-local
+    /// renderers currently no-op — device-side receivers apply their own
+    /// loudness normalization.
+    async fn set_replaygain(&self, _settings: ReplayGainSettings) -> anyhow::Result<()> {
         Ok(())
     }
 

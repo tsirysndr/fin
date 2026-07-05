@@ -17,6 +17,7 @@ use crate::mpv::MpvRenderer;
 use crate::persist::PersistedQueue;
 use crate::queue::{QueueItem, RepeatMode};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
+use crate::replaygain::ReplayGainSettings;
 use crate::symphonia_player::SymphoniaPlayer;
 
 /// Which backend is currently sourcing playback.
@@ -272,6 +273,12 @@ impl Renderer for LocalRenderer {
             Active::Video => self.video.remove_from_queue(index).await,
             Active::None => Ok(()),
         }
+    }
+
+    async fn set_replaygain(&self, settings: ReplayGainSettings) -> Result<()> {
+        // ReplayGain is applied in the audio decode path — mpv has its own
+        // separate volume model for video that we don't touch here.
+        self.audio.set_replaygain(settings).await
     }
 
     fn state(&self) -> PlaybackState {

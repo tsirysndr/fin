@@ -26,6 +26,8 @@ pub struct Config {
     pub last_upnp: Option<String>,
     #[serde(default)]
     pub client: ClientInfo,
+    #[serde(default)]
+    pub replaygain: ReplayGainSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +102,68 @@ impl RendererPref {
             Self::Upnp => "upnp",
         }
     }
+}
+
+/// Which scope of ReplayGain to honor at playback time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ReplayGainMode {
+    #[default]
+    Off,
+    Track,
+    Album,
+}
+
+impl ReplayGainMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Track => "track",
+            Self::Album => "album",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Track,
+            Self::Track => Self::Album,
+            Self::Album => Self::Off,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
+/// Config-facing ReplayGain settings. Behavior (tag extraction + linear
+/// gain computation) lives in `fin_player::replaygain`; this is just data.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ReplayGainSettings {
+    #[serde(default)]
+    pub mode: ReplayGainMode,
+    #[serde(default = "default_replaygain_preamp_db")]
+    pub preamp_db: f32,
+    #[serde(default = "default_replaygain_prevent_clip")]
+    pub prevent_clip: bool,
+}
+
+impl Default for ReplayGainSettings {
+    fn default() -> Self {
+        Self {
+            mode: ReplayGainMode::Off,
+            preamp_db: default_replaygain_preamp_db(),
+            prevent_clip: default_replaygain_prevent_clip(),
+        }
+    }
+}
+
+fn default_replaygain_preamp_db() -> f32 {
+    0.0
+}
+
+fn default_replaygain_prevent_clip() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

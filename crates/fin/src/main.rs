@@ -189,6 +189,11 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
                 .as_ref()
                 .and_then(|p| fin_player::load_persisted_queue(p));
             let r = LocalRenderer::with_persist(queue_path);
+            // Apply the user's ReplayGain preference before playback starts
+            // so the very first track's samples get scaled correctly.
+            if let Err(e) = r.set_replaygain(cfg.replaygain).await {
+                tracing::warn!(?e, "replaygain apply failed");
+            }
             if let Some(snap) = saved {
                 if !snap.items.is_empty() {
                     let items_n = snap.items.len();

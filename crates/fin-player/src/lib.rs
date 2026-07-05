@@ -5,6 +5,7 @@ pub mod mpv;
 pub mod persist;
 pub mod queue;
 pub mod renderer;
+pub mod replaygain;
 pub mod symphonia_player;
 pub mod upnp;
 
@@ -15,5 +16,6 @@ pub use mpv::MpvRenderer;
 pub use persist::{load as load_persisted_queue, PersistedQueue};
 pub use queue::{PlaybackQueue, QueueItem, RepeatMode};
 pub use renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
+pub use replaygain::{ReplayGainInfo, ReplayGainMode, ReplayGainSettings};
 pub use symphonia_player::SymphoniaPlayer;
 pub use upnp::{discover_upnp_renderers, UpnpDevice, UpnpRenderer};

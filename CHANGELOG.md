@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Shuffle-play shortcut** — `Shift+X` plays the highlighted container
+  (album, artist, playlist, series) or, on flat views, everything in the
+  current list (all favorite tracks, all videos, an open album/playlist's
+  tracks) in random order. The pool is shuffled up front so the first track
+  is random too, and shuffle mode is switched on for whatever joins the
+  queue later.
+
 ### Changed
 - **ReplayGain now runs in the Rockbox DSP** — upgraded `rockbox-dsp` to
   0.2.0 and moved gain application into its pre-gain (PGA) stage, the same

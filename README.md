@@ -55,7 +55,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
 - **fzf-style instant search** — results update on every keystroke.
 - **Drill-in navigation** — Enter on an album lists its tracks, Enter on a
   series lists its episodes, Enter on a playlist lists its items. `x`
-  plays the whole container in one go.
+  plays the whole container in one go, `Shift+X` does the same shuffled.
 - **No list truncation** — Music, Videos, and Playlists fetch every item
   the server has, so nothing stays hidden past an arbitrary limit.
 - **Three renderers**, one interface:
@@ -340,6 +340,7 @@ Tab order — the default screen is **Music**:
 | `PgUp` / `PgDown`            | jump 10 rows                        |
 | `Enter`                      | **drill in** on a container (album, series, playlist) — plays a leaf (track, episode, movie); on Queue → **jump** the playhead to the selected entry; on Devices → connect to the selected Chromecast / UPnP renderer; on Settings → switch server |
 | `x`                          | play the highlighted container as one queue **without** drilling in (album → all tracks, playlist → all items) |
+| `Shift+X`                    | **shuffle-play** — same pool as `x` for a highlighted container; on flat views (Favorites, Videos, open album/playlist) the whole list, in random order, with shuffle mode switched on |
 | `a`                          | enqueue the highlighted item        |
 | `n`                          | play the highlighted item **next**  |
 | `Shift+L` / `Shift+D`        | **like / dislike** — add or remove the highlighted item (or the playing track) from Favorites; Jellyfin favorites, Subsonic stars |

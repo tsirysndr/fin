@@ -49,6 +49,7 @@ pub const HELP_SECTIONS: &[HelpSection] = &[
         title: "Playback",
         entries: &[
             HelpEntry { key: "x", description: "play the highlighted container without drilling in" },
+            HelpEntry { key: "Shift+X", description: "shuffle-play — the highlighted container or the whole view (album / playlist / favorites / videos)" },
             HelpEntry { key: "a", description: "enqueue the highlighted item" },
             HelpEntry { key: "n", description: "play the highlighted item next" },
             HelpEntry { key: "Space / p", description: "pause / resume" },

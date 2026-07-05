@@ -10,6 +10,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use parking_lot::Mutex;
+use rand::seq::SliceRandom;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
@@ -707,6 +708,78 @@ impl App {
         }
     }
 
+    /// `Shift+X` — shuffle-play. If the highlighted item is a container
+    /// (album, artist, playlist, series) its children become the pool;
+    /// otherwise every playable item in the current view does — all
+    /// favorite tracks, all videos, an open album/playlist's tracks, ….
+    /// The pool is Fisher-Yates shuffled client-side so the first track
+    /// is random too — the queue's own shuffle flag only reshuffles
+    /// *behind* the playhead, which would pin track 1.
+    async fn play_all_shuffled(&mut self) {
+        if matches!(
+            self.screen,
+            Screen::Queue | Screen::Devices | Screen::Settings
+        ) {
+            self.set_status("Shuffle-play works on library screens — z shuffles the queue.");
+            return;
+        }
+        let pool = match self.selected_item() {
+            Some(item)
+                if matches!(
+                    item.kind(),
+                    ItemKind::MusicAlbum
+                        | ItemKind::MusicArtist
+                        | ItemKind::Playlist
+                        | ItemKind::Series
+                ) =>
+            {
+                match self.expand_playable(item).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.set_status(format!("expand: {}", e));
+                        return;
+                    }
+                }
+            }
+            _ => {
+                // Flat views (favorites, videos, open album/playlist,
+                // search results): take everything directly playable and
+                // skip container rows.
+                let mut v = self.current_list();
+                v.retain(|it| it.kind().is_playable());
+                v
+            }
+        };
+        if pool.is_empty() {
+            self.set_status("Nothing playable here.");
+            return;
+        }
+        let format = StreamFormat::Direct;
+        let mut queue_items = Vec::with_capacity(pool.len());
+        for it in &pool {
+            match self.base_item_to_queue(it, format) {
+                Ok(q) => queue_items.push(q),
+                Err(e) => warn!(?e, "skip item"),
+            }
+        }
+        if queue_items.is_empty() {
+            self.set_status("No playable stream URLs.");
+            return;
+        }
+        queue_items.shuffle(&mut rand::rng());
+        let count = queue_items.len();
+        let renderer = self.renderer.lock().clone();
+        match renderer.play(queue_items, 0).await {
+            Ok(()) => {
+                // Flag shuffle mode ON too, so the indicator lights up and
+                // anything enqueued later joins the deck shuffled.
+                let _ = renderer.set_shuffle(true).await;
+                self.set_status(format!("⤨ Shuffling {} item(s)", count));
+            }
+            Err(e) => self.set_status(format!("renderer: {}", e)),
+        }
+    }
+
     async fn open_album_selected(&mut self, item: BaseItem) {
         let jf = self.jf();
         let out = self.album_tracks.clone();
@@ -1371,6 +1444,10 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyCode::Char('n'), _) => app.play_selected(PlayMode::PlayNext).await,
         // `x` — play the highlighted container *right now*, without drilling in.
         (KeyCode::Char('x'), _) => app.play_selected(PlayMode::PlayContainer).await,
+        // `Shift+X` — same idea but shuffled: the highlighted container's
+        // tracks, or the whole visible list (favorites / videos / open
+        // album / playlist), in random order.
+        (KeyCode::Char('X'), _) => app.play_all_shuffled().await,
         (KeyCode::Char(' '), _) | (KeyCode::Char('p'), _) => {
             let renderer = app.renderer.lock().clone();
             let state = renderer.state();

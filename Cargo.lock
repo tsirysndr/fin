@@ -723,6 +723,7 @@ dependencies = [
  "fin-player",
  "futures",
  "parking_lot",
+ "rand",
  "ratatui",
  "serde",
  "serde_json",

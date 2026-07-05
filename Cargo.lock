@@ -597,7 +597,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fin"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "fin-config"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "directories",
@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "fin-jellyfin"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "fin-media"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "fin-player"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "fin-subsonic"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "fin-tui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",

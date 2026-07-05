@@ -10,7 +10,7 @@ use clap::Parser;
 use fin_config::{derive_server_name, Config, RendererPref, ServerConfig};
 use fin_jellyfin::{ItemKind, JellyfinClient, StreamFormat};
 use fin_player::{
-    discover_chromecasts, discover_upnp_renderers, CastDevice, ChromecastRenderer, MpvRenderer,
+    discover_chromecasts, discover_upnp_renderers, CastDevice, ChromecastRenderer, LocalRenderer,
     QueueItem, Renderer, RendererKind, UpnpDevice, UpnpRenderer,
 };
 use fin_tui::{run_tui, App};
@@ -30,8 +30,16 @@ async fn main() -> Result<()> {
     // installed by another crate.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    // preflight: mpv must be installed no matter what renderer the user picks
-    preflight::ensure_mpv()?;
+    // preflight: mpv is needed for *video* only — audio is decoded in-process
+    // via symphonia. Warn once if it's missing so video playback fails loudly
+    // with an actionable message rather than silently.
+    if !preflight::probe_mpv() {
+        eprintln!(
+            "note: mpv not found on PATH — audio still works (symphonia + cpal),\n\
+             but video playback will fail. Install with:\n  {}\n",
+            preflight::mpv_install_hint()
+        );
+    }
 
     // Merge CLI flags into the on-disk config so any setting can be overridden inline.
     let mut config = load_and_merge(&cli)?;
@@ -174,7 +182,9 @@ fn make_client(cfg: &Config) -> Result<JellyfinClient> {
 async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
     match cfg.renderer {
         RendererPref::Mpv => {
-            let r = MpvRenderer::new(None);
+            // "Mpv" pref = local playback. Audio decodes in-process via
+            // symphonia; video still shells out to mpv. See `LocalRenderer`.
+            let r = LocalRenderer::new();
             Ok((Arc::new(r), "this machine".to_string()))
         }
         RendererPref::Chromecast => {

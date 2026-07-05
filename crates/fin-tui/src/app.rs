@@ -22,7 +22,7 @@ use tracing::warn;
 use fin_config::{Config, RendererPref};
 use fin_jellyfin::{BaseItem, ItemKind, JellyfinClient, StreamFormat};
 use fin_player::{
-    discover_chromecasts, discover_upnp_renderers, CastDevice, ChromecastRenderer, MpvRenderer,
+    discover_chromecasts, discover_upnp_renderers, CastDevice, ChromecastRenderer, LocalRenderer,
     PlaybackState, QueueItem, Renderer, RendererKind, UpnpDevice, UpnpRenderer,
 };
 
@@ -679,7 +679,8 @@ impl App {
     }
 
     async fn switch_to_mpv(&self) {
-        let renderer = MpvRenderer::new(None);
+        // Local playback: audio → symphonia, video → mpv.
+        let renderer = LocalRenderer::new();
         let arc: Arc<dyn Renderer> = Arc::new(renderer);
         *self.renderer.lock() = arc;
         *self.renderer_kind.lock() = RendererKind::Mpv;
@@ -689,7 +690,7 @@ impl App {
             cfg.renderer = RendererPref::Mpv;
             let _ = cfg.save();
         }
-        self.set_status("Streaming to local mpv.");
+        self.set_status("Streaming locally (symphonia audio, mpv video).");
     }
 }
 
@@ -1327,7 +1328,7 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             Span::styled("  Renderer      ", title_style()),
             Span::styled(renderer_pref, accent_style()),
             Span::styled(
-                "   (press m for mpv, 6 → Enter for a chromecast / UPnP renderer)",
+                "   (press m for local, 6 → Enter for a chromecast / UPnP renderer)",
                 muted_style(),
             ),
         ]),
@@ -1448,7 +1449,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  space: pause  s: stop  </>: skip  +/-: vol  m: mpv  t: server  /: search  esc: back  q: quit ";
+    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  space: pause  s: stop  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

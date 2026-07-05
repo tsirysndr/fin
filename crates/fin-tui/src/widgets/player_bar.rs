@@ -81,7 +81,7 @@ impl<'a> Widget for PlayerBar<'a> {
 
         let (icon, icon_style) = status_icon(self.state.status);
         let renderer_icon = match self.renderer {
-            RendererKind::Mpv => "󰐋 mpv",
+            RendererKind::Mpv => "󰐋 local",
             RendererKind::Chromecast => "󰓐 chromecast",
             RendererKind::Upnp => "◈ upnp",
         };

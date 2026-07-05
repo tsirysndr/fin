@@ -412,8 +412,6 @@ struct Track {
     producer: Producer<f32>,
     // Kept so we can query occupancy (`Producer` alone can't).
     ring: Arc<SpscRb<f32>>,
-    // Total slot count of the ring (output_channels-interleaved).
-    ring_capacity: usize,
     // Cancellation flag for the fetcher — flipped when we drop the track early.
     fetch_cancel: Arc<Mutex<SharedBuf>>,
     // Kept alive alongside the decoder — dropping this stops OS output.
@@ -1305,20 +1303,6 @@ fn seek_track(t: &mut Track, pos_secs: f64) {
     }
 }
 
-fn drain_ring(t: &mut Track) {
-    let sr = t.output_sr.max(1);
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        let free = t.ring_free_slots();
-        if free >= t.ring_capacity.saturating_sub(t.output_channels) {
-            break;
-        }
-        let pending = t.ring_pending_frames();
-        let sleep_ms = ((pending as f64 / sr as f64) * 1000.0) as u64;
-        thread::sleep(Duration::from_millis(sleep_ms.min(200).max(10)));
-    }
-}
-
 fn stop_current(track: &mut Option<Track>) {
     if let Some(t) = track.take() {
         // Signal the fetcher thread that we no longer care about the data.
@@ -1544,7 +1528,7 @@ fn load_track(
         "opening cpal output"
     );
 
-    let (stream, producer, ring, ring_capacity) =
+    let (stream, producer, ring) =
         build_output_stream(&device, &default_cfg, paused.clone())?;
 
     let mut resampler = Resampler::new(source_sr, output_sr, source_channels, output_channels);
@@ -1578,7 +1562,6 @@ fn load_track(
         resampler: Resampler::new(source_sr, output_sr, source_channels, output_channels),
         producer,
         ring,
-        ring_capacity,
         fetch_cancel,
         _stream: stream,
         item,
@@ -1662,7 +1645,7 @@ fn build_output_stream(
     device: &cpal::Device,
     default_cfg: &cpal::SupportedStreamConfig,
     paused: Arc<AtomicBool>,
-) -> Result<(cpal::Stream, Producer<f32>, Arc<SpscRb<f32>>, usize)> {
+) -> Result<(cpal::Stream, Producer<f32>, Arc<SpscRb<f32>>)> {
     if default_cfg.sample_format() != SampleFormat::F32 {
         return Err(anyhow!(
             "device default output is {:?}, only f32 is supported",
@@ -1675,8 +1658,7 @@ fn build_output_stream(
 
     // ~250 ms of interleaved output-rate audio.
     let ring_frames = (output_sr as usize / 4).max(2048);
-    let ring_capacity = ring_frames * output_channels;
-    let rb = Arc::new(SpscRb::<f32>::new(ring_capacity));
+    let rb = Arc::new(SpscRb::<f32>::new(ring_frames * output_channels));
     let producer = rb.producer();
     let consumer = rb.consumer();
 
@@ -1703,7 +1685,7 @@ fn build_output_stream(
         .context("build cpal output stream")?;
 
     stream.play().context("start cpal stream")?;
-    Ok((stream, producer, rb, ring_capacity))
+    Ok((stream, producer, rb))
 }
 
 #[cfg(test)]

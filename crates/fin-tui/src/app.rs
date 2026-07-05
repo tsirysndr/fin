@@ -1077,8 +1077,32 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.set_status(format!("ReplayGain: {}", new_settings.mode.label()));
             }
         }
+        // Shift+F cycles common crossfade durations. Preserves the current
+        // mode (Off keeps its stored duration; user still has to hit `f`
+        // to actually enable the fade).
+        (KeyCode::Char('F'), _) => {
+            const DURATIONS: [f32; 4] = [3.0, 5.0, 8.0, 12.0];
+            let mut new_settings = app.config.lock().crossfade;
+            let cur = new_settings.duration_secs;
+            let next = DURATIONS
+                .iter()
+                .copied()
+                .find(|d| *d > cur + 0.001)
+                .unwrap_or(DURATIONS[0]);
+            new_settings.duration_secs = next;
+            let renderer = app.renderer.lock().clone();
+            if let Err(e) = renderer.set_crossfade(new_settings).await {
+                app.set_status(format!("crossfade: {}", e));
+            } else {
+                let mut cfg = app.config.lock();
+                cfg.crossfade = new_settings;
+                let _ = cfg.save();
+                drop(cfg);
+                app.set_status(format!("Crossfade duration: {:.1}s", next));
+            }
+        }
         // Crossfade: `f` cycles off → crossfade → mixed → off. Duration
-        // is edited in config.toml.
+        // is edited via Shift+F or config.toml.
         (KeyCode::Char('f'), _) => {
             let mut new_settings = {
                 let cfg = app.config.lock();
@@ -1514,7 +1538,7 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             Span::styled(cfg_snapshot.crossfade.mode.label(), accent_style()),
             Span::styled(
                 format!(
-                    "   duration {:.1} s   (press f to cycle; duration in config.toml)",
+                    "   duration {:.1} s   (f: cycle mode, Shift+F: cycle duration)",
                     cfg_snapshot.crossfade.duration_secs
                 ),
                 muted_style(),
@@ -1629,7 +1653,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  f: crossfade  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
+    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  f/F: crossfade/dur  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

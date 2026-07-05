@@ -635,7 +635,12 @@ impl App {
                 )
                 .await
             {
-                Ok(v) => {
+                Ok(mut v) => {
+                    // Belt-and-braces: Jellyfin already applies the sort
+                    // above, but some libraries have stale metadata and we
+                    // don't want a single mis-tagged track to break disc
+                    // grouping downstream.
+                    sort_album_tracks(&mut v);
                     *status.lock() =
                         Some((format!("◈ {} — {} track(s)", name, v.len()), Instant::now()));
                     *out.lock() = v;
@@ -1350,25 +1355,8 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             draw_list(f, area, app, " ♪ Music — Albums ")
         }
         Screen::Music => {
-            let name = app
-                .open_album
-                .lock()
-                .as_ref()
-                .map(|a| a.name.clone())
-                .unwrap_or_default();
-            let sub = app
-                .open_album
-                .lock()
-                .as_ref()
-                .map(|a| a.subtitle())
-                .unwrap_or_default();
-            let title = format!(
-                " ◈ {}   {}   — {} track(s)   (Esc to go back) ",
-                name,
-                sub,
-                app.album_tracks.lock().len()
-            );
-            draw_list_with_title(f, area, app, &title);
+            let album = app.open_album.lock().clone();
+            draw_album_tracks(f, area, app, album.as_ref());
         }
         Screen::Videos if app.open_series.lock().is_none() => {
             draw_list(f, area, app, " ▶ Videos — Movies & Series ")
@@ -1465,6 +1453,249 @@ fn draw_list_with_title(f: &mut Frame<'_>, area: Rect, app: &mut App, title: &st
         )
         .highlight_symbol(" ▍ ");
     f.render_stateful_widget(list, area, &mut app.list_state);
+}
+
+/// Client-side sort as a safety net over Jellyfin's server-side ordering.
+/// Sorts by (disc, track, name); tracks missing metadata sink below tracks
+/// with known indices instead of scattering through the list.
+fn sort_album_tracks(items: &mut [BaseItem]) {
+    items.sort_by(|a, b| {
+        let disc_a = a.parent_index_number.unwrap_or(i32::MAX);
+        let disc_b = b.parent_index_number.unwrap_or(i32::MAX);
+        let track_a = a.index_number.unwrap_or(i32::MAX);
+        let track_b = b.index_number.unwrap_or(i32::MAX);
+        disc_a
+            .cmp(&disc_b)
+            .then(track_a.cmp(&track_b))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+/// Album drill-in view. Groups tracks by disc when the album has more than
+/// one, prepends every row with its track number, and includes the album's
+/// production year in the title if present. Headers are rendered as
+/// non-selectable rows — navigation transparently steps over them.
+fn draw_album_tracks(f: &mut Frame<'_>, area: Rect, app: &mut App, album: Option<&BaseItem>) {
+    let tracks = app.album_tracks.lock().clone();
+    let name = album.map(|a| a.name.clone()).unwrap_or_default();
+    let sub = album.map(|a| a.subtitle()).unwrap_or_default();
+    let year = album
+        .and_then(|a| a.production_year)
+        .map(|y| format!("  ({y})"))
+        .unwrap_or_default();
+    let title = format!(
+        " ◈ {}{}   {}   — {} track(s)   (Esc to go back) ",
+        name,
+        year,
+        sub,
+        tracks.len()
+    );
+
+    let block = neon_block(&title, true);
+    let inner = block.inner(area);
+
+    if tracks.is_empty() {
+        f.render_widget(block, area);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  Loading tracks…",
+                muted_style(),
+            )))
+            .alignment(Alignment::Center),
+            inner.inner(Margin::new(2, 1)),
+        );
+        return;
+    }
+
+    // How wide is a track-number column? Widest track number governs
+    // padding so single-digit and triple-digit tracks line up.
+    let widest_track = tracks
+        .iter()
+        .filter_map(|t| t.index_number)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let tn_width = widest_track.to_string().len().max(2);
+
+    // Show disc headers only when the album actually has more than one
+    // disc — single-disc albums render as a plain list.
+    let discs: std::collections::BTreeSet<i32> = tracks
+        .iter()
+        .map(|t| t.parent_index_number.unwrap_or(1))
+        .collect();
+    let show_disc_headers = discs.len() > 1;
+
+    // Row layout matches the standard list widths so track columns line up
+    // with the rest of the app. The 3 cols reserved for the highlight
+    // symbol (" ▍ ") come off the top before layout compute.
+    let row_width = inner.width.saturating_sub(3);
+    let layout = RowLayout::compute(row_width);
+
+    // Build visual rows + map every TRACK index → visual row index so the
+    // list cursor lands on the right visible line.
+    let mut items: Vec<ListItem> = Vec::with_capacity(tracks.len() + discs.len());
+    let mut track_to_visual: Vec<usize> = Vec::with_capacity(tracks.len());
+    let mut header_visual_indices: Vec<usize> = Vec::new();
+    let mut current_disc: Option<i32> = None;
+
+    for (ti, track) in tracks.iter().enumerate() {
+        let disc = track.parent_index_number.unwrap_or(1);
+        if show_disc_headers && current_disc != Some(disc) {
+            header_visual_indices.push(items.len());
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("   ▤ Disc {}", disc),
+                    Style::default()
+                        .fg(Palette::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])));
+            current_disc = Some(disc);
+        }
+        track_to_visual.push(items.len());
+        items.push(ListItem::new(album_track_row(
+            track,
+            Some(ti) == app.list_state.selected(),
+            layout,
+            tn_width,
+        )));
+    }
+
+    // Map the app's TRACK-index selection into the visual list.
+    let sel_track = app
+        .list_state
+        .selected()
+        .unwrap_or(0)
+        .min(tracks.len().saturating_sub(1));
+    let sel_visual = track_to_visual.get(sel_track).copied();
+
+    let mut local_state = ListState::default();
+    local_state.select(sel_visual);
+
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .bg(Palette::SURFACE)
+                .fg(Palette::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(" ▍ ");
+    f.render_stateful_widget(list, area, &mut local_state);
+}
+
+/// Build a track row for the album drill-in — same layout as `item_row_line`
+/// but with the track number spliced in ahead of the title. Selection state
+/// still colors the icon + main text.
+fn album_track_row<'a>(
+    track: &'a BaseItem,
+    selected: bool,
+    layout: RowLayout,
+    tn_width: usize,
+) -> Line<'a> {
+    use unicode_width::UnicodeWidthStr;
+
+    let (icon_fg, main_style) = if selected {
+        (
+            Palette::PRIMARY,
+            Style::default()
+                .fg(Palette::FG)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (Palette::ACCENT, Style::default().fg(Palette::FG))
+    };
+
+    let icon_text = format!(" ♪ ");
+    let tn_text = match track.index_number {
+        Some(n) => format!("{:>tn_width$}. ", n, tn_width = tn_width),
+        None => format!("{:>tn_width$}  ", "", tn_width = tn_width),
+    };
+    // The track number eats into what was the title column, so recompute
+    // the title budget so subtitles and times stay aligned with sibling
+    // rows.
+    let tn_len = UnicodeWidthStr::width(tn_text.as_str());
+    let title_budget = layout.title_col.saturating_sub(tn_len);
+    let title = truncate_to_width(&track.name, title_budget);
+    let title_padded = pad_right(&title, title_budget);
+    let sub = track.subtitle();
+    let sub_text = if layout.sub_col > 0 {
+        pad_right(&truncate_to_width(&sub, layout.sub_col), layout.sub_col)
+    } else {
+        String::new()
+    };
+    let time = track
+        .duration_secs()
+        .map(fmt_dur_local)
+        .unwrap_or_default();
+    let time_pad = layout
+        .time_col
+        .saturating_sub(UnicodeWidthStr::width(time.as_str()));
+    let time_text = format!("{}{}", " ".repeat(time_pad), time);
+
+    let gap1 = " ".repeat(layout.gap1);
+    let gap2 = " ".repeat(layout.gap2);
+
+    Line::from(vec![
+        Span::styled(
+            icon_text,
+            Style::default().fg(icon_fg).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(tn_text, muted_style()),
+        Span::styled(title_padded, main_style),
+        Span::raw(gap1),
+        Span::styled(sub_text, Style::default().fg(Palette::MUTED)),
+        Span::raw(gap2),
+        Span::styled(time_text, Style::default().fg(Palette::SKY)),
+    ])
+}
+
+// --- small local formatting helpers (mirror screens/mod.rs privates so we
+//     don't have to make them pub; the album view is the only extra caller)
+
+fn fmt_dur_local(secs: u64) -> String {
+    let (h, rem) = (secs / 3600, secs % 3600);
+    let (m, s) = (rem / 60, rem % 60);
+    if h > 0 {
+        format!("{}:{:02}:{:02}", h, m, s)
+    } else {
+        format!("{}:{:02}", m, s)
+    }
+}
+
+fn truncate_to_width(s: &str, max_cols: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    use unicode_width::UnicodeWidthStr;
+
+    if UnicodeWidthStr::width(s) <= max_cols {
+        return s.to_string();
+    }
+    if max_cols <= 1 {
+        return "…".into();
+    }
+    let target = max_cols - 1;
+    let mut acc = String::new();
+    let mut w = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if w + cw > target {
+            break;
+        }
+        acc.push(ch);
+        w += cw;
+    }
+    acc.push('…');
+    acc
+}
+
+fn pad_right(s: &str, cols: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let w = UnicodeWidthStr::width(s);
+    if w >= cols {
+        s.to_string()
+    } else {
+        format!("{}{}", s, " ".repeat(cols - w))
+    }
 }
 
 fn draw_search(f: &mut Frame<'_>, area: Rect, app: &mut App) {
@@ -1864,5 +2095,85 @@ impl App {
     }
     pub fn save_config(&self) -> Result<()> {
         self.config.lock().save().context("saving config")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(name: &str, disc: Option<i32>, tn: Option<i32>) -> BaseItem {
+        BaseItem {
+            id: name.into(),
+            name: name.into(),
+            type_: "Audio".into(),
+            album: None,
+            album_id: None,
+            album_artist: None,
+            artists: None,
+            series_name: None,
+            production_year: None,
+            run_time_ticks: None,
+            media_type: None,
+            container: None,
+            index_number: tn,
+            parent_index_number: disc,
+            image_tags: None,
+            is_folder: None,
+            overview: None,
+        }
+    }
+
+    fn names(items: &[BaseItem]) -> Vec<String> {
+        items.iter().map(|i| i.name.clone()).collect()
+    }
+
+    #[test]
+    fn sort_by_disc_then_track_number() {
+        let mut v = vec![
+            track("d2-t1", Some(2), Some(1)),
+            track("d1-t2", Some(1), Some(2)),
+            track("d1-t1", Some(1), Some(1)),
+            track("d2-t2", Some(2), Some(2)),
+        ];
+        sort_album_tracks(&mut v);
+        assert_eq!(
+            names(&v),
+            vec!["d1-t1", "d1-t2", "d2-t1", "d2-t2"]
+        );
+    }
+
+    #[test]
+    fn tracks_missing_metadata_sink_to_the_end() {
+        let mut v = vec![
+            track("orphan", None, None),
+            track("t2", Some(1), Some(2)),
+            track("t1", Some(1), Some(1)),
+        ];
+        sort_album_tracks(&mut v);
+        assert_eq!(names(&v), vec!["t1", "t2", "orphan"]);
+    }
+
+    #[test]
+    fn ties_break_on_name() {
+        let mut v = vec![
+            track("Z", Some(1), Some(3)),
+            track("A", Some(1), Some(3)),
+            track("M", Some(1), Some(3)),
+        ];
+        sort_album_tracks(&mut v);
+        assert_eq!(names(&v), vec!["A", "M", "Z"]);
+    }
+
+    #[test]
+    fn stable_when_already_sorted() {
+        let mut v = vec![
+            track("t1", Some(1), Some(1)),
+            track("t2", Some(1), Some(2)),
+            track("t3", Some(1), Some(3)),
+        ];
+        let before = names(&v);
+        sort_album_tracks(&mut v);
+        assert_eq!(names(&v), before);
     }
 }

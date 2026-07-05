@@ -5,10 +5,11 @@ when:
 engine: nixery
 
 dependencies:
-  - cargo
-  - rustc
-  - rustfmt
-  - gcc
+  nixpkgs:
+    - cargo
+    - rustc
+    - rustfmt
+    - gcc
 
 steps:
   - name: nix build

@@ -10,6 +10,8 @@ dependencies:
     - rustc
     - rustfmt
     - gcc
+    - pkg-config
+    - alsa-lib
 
 steps:
   - name: nix build

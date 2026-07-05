@@ -218,6 +218,18 @@ impl App {
             .and_then(|i| list.get(i).cloned())
     }
 
+    /// Length of the currently-navigable list for the active screen.
+    /// Devices and Settings render their own row types, not `BaseItem`s, so
+    /// `current_list()` is empty for them — nav has to size against the real
+    /// backing collection instead.
+    fn list_len(&self) -> usize {
+        match self.screen {
+            Screen::Devices => self.devices.lock().len(),
+            Screen::Settings => self.config.lock().servers.len(),
+            _ => self.current_list().len(),
+        }
+    }
+
     fn set_status(&self, msg: impl Into<String>) {
         *self.status_message.lock() = Some((msg.into(), Instant::now()));
     }
@@ -886,7 +898,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
-            let len = app.current_list().len();
+            let len = app.list_len();
             let i = app.list_state.selected().unwrap_or(0);
             if len > 0 {
                 app.list_state.select(Some((i + 1).min(len - 1)));
@@ -897,7 +909,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.list_state.select(Some(i.saturating_sub(1)));
         }
         (KeyCode::PageDown, _) => {
-            let len = app.current_list().len();
+            let len = app.list_len();
             let i = app.list_state.selected().unwrap_or(0);
             if len > 0 {
                 app.list_state.select(Some((i + 10).min(len - 1)));

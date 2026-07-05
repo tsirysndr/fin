@@ -2,19 +2,52 @@
 
 [![Release](https://github.com/tsirysndr/fin/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/fin/actions/workflows/release.yml)
 
-> a Jellyfin client for the terminal — powered by `mpv`, Chromecast, and UPnP
+> a Jellyfin client for the terminal — powered by `symphonia`, `mpv`, Chromecast, and UPnP
 
 ![fin — neon-electric Jellyfin TUI](.github/assets/preview.png)
 
 `fin` is a Rust TUI + one-shot CLI that talks to your Jellyfin server, searches
-your library, manages playlists, and pushes streams to your local **mpv**
-window, any **Chromecast** on your network, or any **UPnP MediaRenderer** (Sonos,
-Kodi, Roon endpoints, Samsung/LG TVs, gmediarender, …). Remote playback is
-fully queued — enqueue, play-next, skip, resume, all from the terminal.
+your library, manages playlists, and pushes streams to your local machine
+(**symphonia** for audio, **mpv** for video), any **Chromecast** on your
+network, or any **UPnP MediaRenderer** (Sonos, Kodi, Roon endpoints, Samsung/LG
+TVs, gmediarender, …). Local playback is now audio-native — HTTP streaming,
+decoding, resampling, and output all run in-process, and audio never touches
+mpv. Remote playback is fully queued, with client-side auto-advance.
+
+## Contents
+
+- [Features](#features)
+- [Install](#install)
+  - [macOS / Linux — Homebrew](#macos--linux--homebrew)
+  - [Debian / Ubuntu — `.deb`](#debian--ubuntu--deb)
+  - [Fedora / RHEL / openSUSE — `.rpm`](#fedora--rhel--opensuse--rpm)
+  - [Arch — from AUR / source](#arch--from-aur--source)
+  - [Prebuilt tarballs](#prebuilt-tarballs)
+  - [From source](#from-source)
+  - [Nix](#nix)
+- [Getting started](#getting-started)
+- [Renderer selection](#renderer-selection)
+- [All settings](#all-settings)
+- [Multiple servers](#multiple-servers)
+- [Sub-commands](#sub-commands)
+- [Keybindings (TUI)](#keybindings-tui)
+- [Playback modes & effects](#playback-modes--effects)
+  - [Shuffle](#shuffle)
+  - [Repeat](#repeat)
+  - [ReplayGain](#replaygain)
+  - [Crossfade](#crossfade)
+- [Queue persistence](#queue-persistence)
+- [Remote-renderer queue](#remote-renderer-queue)
+- [Streams & transcoding](#streams--transcoding)
+- [Development](#development)
+- [License](#license)
 
 ## Features
 
 - **Ratatui-based TUI** with a neon-electric palette (teal / cyan / violet).
+- **In-process audio** — HTTP streaming + `symphonia` decode (MP3, FLAC, AAC,
+  Opus, Vorbis, ALAC, WAV, …) + resampling + `cpal` output. mpv is used only
+  for video.
 - **fzf-style instant search** — results update on every keystroke.
 - **Drill-in navigation** — Enter on an album lists its tracks, Enter on a
   series lists its episodes, Enter on a playlist lists its items. `x`
@@ -22,18 +55,27 @@ fully queued — enqueue, play-next, skip, resume, all from the terminal.
 - **No list truncation** — Music, Videos, and Playlists fetch every item
   the server has, so nothing stays hidden past an arbitrary limit.
 - **Three renderers**, one interface:
-  - `mpv` (local) — spawned automatically and driven via its JSON IPC socket.
-  - `chromecast` — device discovery via mDNS, playback through the Default
+  - **local** (default) — symphonia + cpal for audio, mpv for video, spawned
+    only when needed.
+  - **chromecast** — device discovery via mDNS, playback through the Default
     Media Receiver, with a **local queue** that auto-advances on `FINISHED`.
-  - `upnp` — SSDP discovery of any UPnP AV MediaRenderer, playback via
+  - **upnp** — SSDP discovery of any UPnP AV MediaRenderer, playback via
     AVTransport (`SetAVTransportURI` / `Play` / `Pause` / `Stop` / `Seek`)
     and volume via RenderingControl. Same auto-advancing queue.
-- **Real queue management** — enqueue, play next, jump between tracks, and
-  see the whole queue in its own tab. Works identically for all renderers.
+- **Playback modes** — shuffle, repeat-off/all/one, [ReplayGain](#replaygain)
+  (track / album), and [crossfade](#crossfade) between adjacent tracks
+  (traditional cosine curves *or* additive DJ-mixed).
+- **Queue persistence** — the audio queue, shuffle/repeat state, and the exact
+  playhead within the current track survive restarts. Restore lands paused;
+  `Space` picks up where you left off.
+- **Real queue management** — enqueue, play next, jump between tracks, remove
+  a single entry, clear the whole queue, and see the queue in its own tab
+  with a `▶` marker on the actually-playing track.
 - **Playlists** — browse, open, and play the playlists you've saved on the
   server.
 - **Now Playing bar** with title, subtitle, elapsed / total time, a neon
-  progress gauge, volume, and the active renderer.
+  progress gauge, volume, and mode badges (shuffle ⇄, repeat ↻/↺,
+  ReplayGain, crossfade ⋈/≈).
 - **CLI shortcuts** for scripting: `fin play "kind of blue"`,
   `fin queue --chromecast "Living Room" "wednesday"`,
   `fin play --upnp "Kitchen Speaker" "solaris"`, `fin devices`.
@@ -43,8 +85,10 @@ fully queued — enqueue, play-next, skip, resume, all from the terminal.
 
 ## Install
 
-`fin` needs **`mpv`** on your `$PATH` at runtime. Every install path below
-either bundles it or pulls it in as a dependency.
+Local audio needs no extra binaries — everything is baked into the `fin`
+binary. **`mpv`** is only needed on `$PATH` when you actually play video
+locally. Every install path below either bundles it or pulls it in as a
+soft dependency.
 
 ### macOS / Linux — Homebrew
 
@@ -69,7 +113,7 @@ curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.2.0_arm
 sudo apt install ./fin_0.2.0_arm64.deb
 ```
 
-`apt` will pull in `mpv` automatically as a dependency.
+`apt` will pull in `libasound2` (ALSA runtime for cpal) and `mpv` automatically.
 
 Or add the Gemfury apt repo once and `apt install` normally:
 
@@ -104,7 +148,7 @@ sudo dnf install fin
 `mpv` from the official repos, then:
 
 ```bash
-sudo pacman -S mpv
+sudo pacman -S mpv alsa-lib
 cargo install --git https://github.com/tsirysndr/fin --bin fin
 ```
 
@@ -118,15 +162,16 @@ For any other platform, grab the tarball for your arch from the
 - `fin-<version>-macos-amd64.tar.gz`
 - `fin-<version>-macos-aarch64.tar.gz`
 
-Each includes the `fin` binary + README + LICENSE. Install `mpv` yourself:
+Each includes the `fin` binary + README + LICENSE. Install runtime deps
+yourself:
 
 ```bash
 # macOS
-brew install mpv
+brew install mpv                  # video only; audio is in-process
 # Debian / Ubuntu
-sudo apt install mpv
+sudo apt install libasound2 mpv
 # Arch
-sudo pacman -S mpv
+sudo pacman -S alsa-lib mpv
 ```
 
 ### From source
@@ -136,6 +181,9 @@ git clone https://github.com/tsirysndr/fin
 cd fin
 cargo install --path crates/fin
 ```
+
+Build-time on Linux needs `libasound2-dev` + `pkg-config` (cpal's ALSA
+backend); on macOS the Core Audio SDK is already in the toolchain.
 
 ### Nix
 
@@ -149,7 +197,7 @@ nix run github:tsirysndr/fin
 # Install into your user profile:
 nix profile install github:tsirysndr/fin
 
-# Dev shell (rust toolchain + mpv + clippy + rust-analyzer):
+# Dev shell (rust toolchain + mpv + alsa-lib + clippy + rust-analyzer):
 nix develop
 ```
 
@@ -180,7 +228,10 @@ Three ways to choose a renderer — all equivalent:
 | `--mpv`                                | `--renderer mpv`          | `renderer = "mpv"`             |
 | `--chromecast "Living Room"`           | `--renderer chromecast`   | `renderer = "chromecast"`      |
 | `--upnp "Kitchen Speaker"`             | `--renderer upnp`         | `renderer = "upnp"`            |
-| _(none — falls back to mpv)_           |                           |                                |
+| _(none — falls back to local)_         |                           |                                |
+
+The `--mpv` / `renderer = "mpv"` flag name is historical; it selects the
+**local** renderer, which uses symphonia+cpal for audio and mpv for video.
 
 When you pass `--chromecast NAME` or `--upnp NAME`, the renderer is switched
 to that protocol automatically and the named device is preferred on connect.
@@ -203,6 +254,17 @@ Every setting exists as both a CLI flag and a TOML key. Flags win.
 | `--chromecast [NAME]` | `FIN_CHROMECAST`    | `last_chromecast`         |                  |
 | `--upnp [NAME]`       | `FIN_UPNP`          | `last_upnp`               |                  |
 | `-v`, `-vv`           |                     | _(log level)_             | `warn`           |
+
+Audio-side playback settings live under TOML sub-tables and are toggled from
+the TUI (see [Playback modes & effects](#playback-modes--effects)):
+
+| TOML                              | Default | Notes                                  |
+|-----------------------------------|---------|----------------------------------------|
+| `replaygain.mode`                 | `off`   | `off` / `track` / `album`              |
+| `replaygain.preamp_db`            | `0.0`   | additive in dB before clip guard       |
+| `replaygain.prevent_clip`         | `true`  | caps gain so `linear * peak <= 1.0`    |
+| `crossfade.mode`                  | `off`   | `off` / `crossfade` / `mixed`          |
+| `crossfade.duration_secs`         | `5.0`   | overlap window in seconds              |
 
 Find the on-disk config with `fin config --path`; print it with
 `fin config --show`.
@@ -263,20 +325,84 @@ Tab order — the default screen is **Music**:
 | `/`                          | jump to Search & focus input        |
 | `↑` `↓` / `k` `j`            | move selection                      |
 | `PgUp` / `PgDown`            | jump 10 rows                        |
-| `Enter`                      | **drill in** on a container (album, series, playlist) — plays a leaf (track, episode, movie); on Devices → connect to the selected Chromecast / UPnP renderer; on Settings → switch server |
+| `Enter`                      | **drill in** on a container (album, series, playlist) — plays a leaf (track, episode, movie); on Queue → **jump** the playhead to the selected entry; on Devices → connect to the selected Chromecast / UPnP renderer; on Settings → switch server |
 | `x`                          | play the highlighted container as one queue **without** drilling in (album → all tracks, playlist → all items) |
 | `a`                          | enqueue the highlighted item        |
 | `n`                          | play the highlighted item **next**  |
+| `z`                          | toggle shuffle                      |
+| `Shift+R`                    | cycle repeat mode (off → all → one) |
+| `g`                          | cycle ReplayGain (off → track → album) |
+| `f` / `Shift+F`              | cycle crossfade mode / cycle crossfade duration (3, 5, 8, 12 s) |
 | `Space` or `p`               | pause / resume                      |
 | `s`                          | stop                                |
 | `<` / `>` or `h` / `l`       | previous / next track               |
 | `+` / `-`                    | volume up / down                    |
-| `m`                          | switch to local mpv renderer        |
+| `m`                          | switch to local renderer            |
 | `t`                          | cycle to the next saved Jellyfin server |
+| `d`                          | (Queue screen) remove the highlighted entry |
+| `Shift+C`                    | (Queue screen) clear the entire queue |
 | `Esc`                        | pop the current drill-in (back to the parent list) |
 | `r`                          | refresh the current screen          |
 | `Esc`                        | leave the search input / close open playlist |
 | `q` / `Ctrl-C`               | quit                                |
+
+## Playback modes & effects
+
+All of these run only on the local renderer (audio path). Chromecast and
+UPnP receivers each do their own thing; toggles no-op on those renderers.
+Settings persist to `config.toml` and are mirrored back on next launch.
+
+### Shuffle
+
+`z` toggles shuffle. Enabling it reshuffles every item **after** the
+currently-playing track using a Fisher-Yates permutation — the playing track
+stays put so the audio doesn't jump.
+
+### Repeat
+
+`Shift+R` cycles the repeat mode off → all → one → off. `all` wraps in both
+directions (Prev at row 0 goes to the last item); `one` sticks on the
+current track until the mode changes.
+
+### ReplayGain
+
+`g` cycles Off → Track → Album → Off. Reads `REPLAYGAIN_TRACK_GAIN`,
+`REPLAYGAIN_ALBUM_GAIN`, and the matching peak tags off decoded tracks
+(Vorbis-comment or ID3v2), computes a linear gain multiplier
+(`10^((gain + preamp) / 20)`), and folds it into the sample push loop. If
+the requested scope's tag is missing, the other scope is used as a fallback.
+Clip prevention is on by default — it caps the multiplier so peaks stay ≤ 1.0.
+
+### Crossfade
+
+`f` cycles Off → **Crossfade** → **Mixed** → Off.
+
+- **Crossfade** — cosine/sine curves (out² + in² = 1); perceived loudness
+  stays constant across the overlap.
+- **Mixed** — no curves; both tracks play at full volume during the overlap
+  and sum additively (louder DJ-style mix).
+
+`Shift+F` cycles the duration through 3, 5, 8, 12 s, preserving the current
+mode. Duration is also editable directly in `config.toml`.
+
+Under the hood, `fin` runs a second decoder + cpal output stream during the
+overlap and the OS mixer sums them. The overlap kicks in both on natural
+end-of-track transitions AND when you Play a new album or jump to a new
+queue entry — so switching tracks manually still fades cleanly.
+
+## Queue persistence
+
+The audio queue, shuffle/repeat state, and the exact playhead within the
+currently-playing track are written to `cache_dir/queue.json` on every
+mutation and every ~3 s while playing. Writes are debounced and atomic
+(rename-in-place), so a crash mid-write can't leave a truncated file.
+
+On startup, `fin` reads the snapshot and restores the queue paused at the
+saved position. `Space` (or `p`) resumes from exactly where you left off.
+Video items in a saved queue are filtered out silently — the persistence
+path lives on the audio side; the mpv-driven video path is transient.
+
+Find the file with `fin config --path` (adjacent to the config dir).
 
 ## Remote-renderer queue
 
@@ -296,12 +422,15 @@ still work for transport — volume changes are just no-ops on the device.
 
 ## Streams & transcoding
 
-- Local **mpv** playback uses the original stream (`Static=true`), which
-  is the fastest path and lets mpv handle any container Jellyfin can
-  direct-stream.
+- Local **audio** uses the original stream — `symphonia` decodes MP3 / FLAC
+  / AAC / ALAC / Opus / Vorbis / WAV / … directly in-process, resampled to
+  the output device's rate. No transcoding round-trip; no mpv on the audio
+  path.
+- Local **video** shells out to **mpv** with `Static=true` — the fastest
+  direct-stream path, mpv handles any container Jellyfin can hand it.
 - **Chromecast** playback defaults to Jellyfin's HLS output (`main.m3u8`),
   because the Default Media Receiver's codec matrix is much narrower than
-  mpv's. This means Jellyfin will transcode when it needs to.
+  mpv's. Jellyfin will transcode when it needs to.
 - **UPnP** playback uses the direct stream by default — most UPnP
   MediaRenderers speak MP3 / AAC / FLAC natively and the direct path avoids
   the transcode. Fall back to HLS with `--hls` if your renderer needs it.
@@ -313,6 +442,7 @@ still work for transport — volume changes are just no-ops on the device.
 cargo check --workspace
 cargo build --release -p fin
 ./target/release/fin --help
+cargo test --workspace
 ```
 
 The workspace layout:
@@ -321,9 +451,11 @@ The workspace layout:
 fin/
 ├── crates/
 │   ├── fin/               # binary — clap CLI + startup
-│   ├── fin-config/        # TOML config file & credentials
+│   ├── fin-config/        # TOML config file, credentials, mode enums
 │   ├── fin-jellyfin/      # Jellyfin HTTP API client
-│   ├── fin-player/        # Renderer trait + mpv + Chromecast + UPnP + queue
+│   ├── fin-player/        # Renderer trait, queue, symphonia audio path,
+│   │                      # mpv video, Chromecast + UPnP, replaygain,
+│   │                      # crossfade, queue persistence
 │   └── fin-tui/           # Ratatui neon TUI
 └── Cargo.toml             # workspace + shared deps (rustls only, no openssl)
 ```

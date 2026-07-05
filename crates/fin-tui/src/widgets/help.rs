@@ -33,7 +33,7 @@ pub const HELP_SECTIONS: &[HelpSection] = &[
         title: "Navigation",
         entries: &[
             HelpEntry { key: "Tab / Shift+Tab", description: "next / prev screen" },
-            HelpEntry { key: "1 … 8", description: "jump to Music / Videos / Playlists / Favorites / Queue / Search / Devices / Settings" },
+            HelpEntry { key: "1 … 8", description: "jump to Music / Videos / Playlists / Favorites / Queue / Search / Devices / Settings (Videos is Jellyfin-only — the tab is hidden on Subsonic servers)" },
             HelpEntry { key: "↑ ↓ / k j", description: "move selection" },
             HelpEntry { key: "PgUp / PgDown", description: "jump 10 rows" },
             HelpEntry { key: "Enter", description: "drill in / play leaf / connect (Devices) / switch server (Settings)" },

@@ -330,6 +330,10 @@ Tab order — the default screen is **Music**:
 
   `1` Music • `2` Videos • `3` Playlists • `4` Favorites • `5` Queue • `6` Search • `7` Devices • `8` Settings
 
+The **Videos** tab is Jellyfin-only — Subsonic has no video API, so on a
+Subsonic server the tab is hidden, `Tab`/`Shift+Tab` skip past it, and `2`
+shows a hint instead. The other number keys keep their meanings.
+
 | Key                          | Action                              |
 |------------------------------|-------------------------------------|
 | `?`                          | show / hide the full keyboard-shortcuts help modal |

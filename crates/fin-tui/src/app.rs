@@ -1591,13 +1591,30 @@ fn draw(f: &mut Frame<'_>, app: &mut App) {
     }
 }
 
+/// Human-facing name for a server backend. `ServerKind::label()` returns the
+/// lowercase wire form (`"jellyfin"`); this is the title-cased UI variant.
+fn server_kind_label(kind: fin_config::ServerKind) -> &'static str {
+    match kind {
+        fin_config::ServerKind::Jellyfin => "Jellyfin",
+        fin_config::ServerKind::Subsonic => "Subsonic",
+    }
+}
+
+/// A small glyph that distinguishes the two backends at a glance.
+fn server_kind_icon(kind: fin_config::ServerKind) -> &'static str {
+    match kind {
+        fin_config::ServerKind::Jellyfin => "◈",
+        fin_config::ServerKind::Subsonic => "≋",
+    }
+}
+
 fn draw_header(f: &mut Frame<'_>, area: Rect, app: &App) {
     let pulse = ((app.logo_pulse as f32 * 0.15).sin() * 0.5 + 0.5) * 60.0 + 195.0;
     let r = 0u8;
     let g = pulse as u8;
     let b = (pulse * 0.85) as u8;
     let subtitle_col = ratatui::style::Color::Rgb(r, g, b);
-    let (server, user, server_name, servers_total) = {
+    let (server, user, server_name, server_kind, servers_total) = {
         let cfg = app.config.lock();
         let cur = cfg.current();
         (
@@ -1606,9 +1623,13 @@ fn draw_header(f: &mut Frame<'_>, area: Rect, app: &App) {
             cur.map(|s| s.user_name.clone())
                 .unwrap_or_else(|| "guest".into()),
             cur.map(|s| s.name.clone()).unwrap_or_default(),
+            cur.map(|s| s.server_kind),
             cfg.servers.len(),
         )
     };
+    let kind_badge = server_kind
+        .map(|k| format!("  {} {}", server_kind_icon(k), server_kind_label(k)))
+        .unwrap_or_default();
     let servers_badge = if servers_total > 1 {
         format!("  ⇄ {} servers", servers_total)
     } else {
@@ -1639,6 +1660,12 @@ fn draw_header(f: &mut Frame<'_>, area: Rect, app: &App) {
                 format!("[{}]", server_name)
             },
             Style::default().fg(Palette::HIGHLIGHT),
+        ),
+        Span::styled(
+            kind_badge,
+            Style::default()
+                .fg(Palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(servers_badge, Style::default().fg(Palette::SKY)),
     ]);
@@ -2332,6 +2359,16 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(format!("{:<18}", s.name), name_style),
+                Span::styled(
+                    format!(
+                        "{} {:<9}",
+                        server_kind_icon(s.server_kind),
+                        server_kind_label(s.server_kind)
+                    ),
+                    Style::default()
+                        .fg(Palette::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(format!(" {}  ", s.url), Style::default().fg(Palette::SKY)),
                 Span::styled(
                     format!("as {}", s.user_name),

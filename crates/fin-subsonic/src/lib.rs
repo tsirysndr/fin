@@ -790,6 +790,20 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_starred2_maps_albums_and_songs() {
+        // Real-world shape: `getStarred2` wraps its payload in
+        // `subsonic-response`, with `status` appearing *after* the payload
+        // (key order is server-defined). Starred artists are present but
+        // deliberately dropped by `starred()`.
+        let raw = r#"{"subsonic-response":{"starred2":{"album":[],"artist":[{"id":"ar-1","name":"070 Shake"}],"song":[{"id":"so-1","title":"Catch 1","album":"X","albumId":"al-1","artist":"42 Dugg","track":11,"discNumber":1,"duration":169,"year":2024},{"id":"so-2","title":"Megan","artist":"42 Dugg","duration":155}]},"status":"ok","type":"smolsonic","version":"1.16.1"}}"#;
+        let r: StarredResp = serde_json::from_str(raw).expect("deserialize starred");
+        r.check().expect("check ok");
+        let s = r.starred2().expect("has starred2");
+        assert_eq!(s.album.unwrap_or_default().len(), 0);
+        assert_eq!(s.song.unwrap_or_default().len(), 2);
+    }
+
+    #[test]
     fn deserialize_error_response_surfaces_code_and_message() {
         let raw = r#"{"subsonic-response": {"status": "failed", "error": {"code": 40, "message": "Wrong username or password"}}}"#;
         let r: PingResp = serde_json::from_str(raw).unwrap();

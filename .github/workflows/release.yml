@@ -51,6 +51,13 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # cpal links against ALSA on Linux (macOS uses CoreAudio, no dev pkg needed).
+      - name: Install ALSA dev headers
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} --bin fin
 

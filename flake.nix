@@ -55,6 +55,9 @@
 
           buildInputs = lib.optionals pkgs.stdenv.isDarwin [
             pkgs.libiconv
+          ] ++ lib.optionals pkgs.stdenv.isLinux [
+            # cpal links against ALSA on Linux for the local audio output path.
+            pkgs.alsa-lib
           ];
 
           # Workspace has one bin target — build just that.
@@ -157,6 +160,8 @@
             pkg-config
           ] ++ lib.optionals pkgs.stdenv.isDarwin [
             libiconv
+          ] ++ lib.optionals pkgs.stdenv.isLinux [
+            alsa-lib
           ];
 
           shellHook = ''

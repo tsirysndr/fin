@@ -8,7 +8,7 @@ URL:            https://github.com/tsirysndr/fin
 
 BuildArch:      x86_64
 
-Requires: glibc, mpv
+Requires: glibc, alsa-lib, mpv
 
 %description
 fin is a Rust TUI + one-shot CLI that talks to your Jellyfin server, searches

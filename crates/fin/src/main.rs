@@ -127,6 +127,10 @@ fn load_and_merge(cli: &Cli) -> Result<Config> {
                 .clone()
                 .or_else(|| existing.as_ref().map(|s| s.device_id.clone()))
                 .unwrap_or_default(),
+            server_kind: existing
+                .as_ref()
+                .map(|s| s.server_kind)
+                .unwrap_or_default(),
         };
         cfg.add_or_update_server(merged);
     } else {
@@ -169,12 +173,14 @@ fn load_and_merge(cli: &Cli) -> Result<Config> {
     Ok(cfg)
 }
 
-fn make_client(cfg: &Config) -> Result<JellyfinClient> {
+fn make_client(cfg: &Config) -> Result<Arc<dyn fin_media::MediaClient>> {
     let server = cfg.require_current()?;
-    JellyfinClient::with_credentials(
+    fin_media::client_from_stored(
+        server.server_kind,
         &server.url,
         &server.device_id,
         &server.user_id,
+        &server.user_name,
         &server.access_token,
     )
 }
@@ -295,21 +301,25 @@ async fn cmd_login(
         Some(p) => p,
         None => prompt_password("Password: ")?,
     };
-    let mut client = JellyfinClient::new(&url)?;
-    let auth = client.login(&username, &password).await?;
+    // Auto-detect Jellyfin vs Subsonic — `login_any` probes both and
+    // picks whichever answers first.
+    let logged_in = fin_media::login_any(&url, &username, &password).await?;
     let server = ServerConfig {
         name: server_name.clone(),
         url,
-        user_id: auth.user.id.clone(),
-        user_name: auth.user.name.clone(),
-        access_token: auth.access_token.clone(),
-        device_id: client.device_id().to_string(),
+        user_id: logged_in.auth.user.id.clone(),
+        user_name: logged_in.auth.user.name.clone(),
+        access_token: logged_in.auth.access_token.clone(),
+        device_id: logged_in.device_id.clone(),
+        server_kind: logged_in.kind,
     };
     config.add_or_update_server(server);
     config.save()?;
     println!(
-        "✓ signed in as {} on `{}` — now the active server",
-        auth.user.name, server_name
+        "✓ signed in as {} on `{}` ({}) — now the active server",
+        logged_in.auth.user.name,
+        server_name,
+        logged_in.kind.label()
     );
     if config.servers.len() > 1 {
         println!(

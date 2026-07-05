@@ -604,6 +604,7 @@ dependencies = [
  "directories",
  "fin-config",
  "fin-jellyfin",
+ "fin-media",
  "fin-player",
  "fin-tui",
  "rpassword",
@@ -646,6 +647,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fin-media"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fin-config",
+ "fin-jellyfin",
+ "fin-subsonic",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "fin-player"
 version = "0.3.0"
 dependencies = [
@@ -673,6 +690,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "fin-subsonic"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "fin-jellyfin",
+ "md5",
+ "percent-encoding",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "fin-tui"
 version = "0.3.0"
 dependencies = [
@@ -682,6 +718,7 @@ dependencies = [
  "crossterm",
  "fin-config",
  "fin-jellyfin",
+ "fin-media",
  "fin-player",
  "futures",
  "parking_lot",
@@ -692,6 +729,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width 0.2.0",
+ "uuid",
 ]
 
 [[package]]
@@ -1360,6 +1398,12 @@ checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
 ]
+
+[[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "mdns-sd"

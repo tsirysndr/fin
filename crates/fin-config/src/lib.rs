@@ -94,6 +94,29 @@ pub struct ServerConfig {
     pub user_name: String,
     pub access_token: String,
     pub device_id: String,
+    /// Which backend the URL points at. `#[serde(default)]` = Jellyfin so
+    /// old configs (which don't have this field) keep loading.
+    #[serde(default)]
+    pub server_kind: ServerKind,
+}
+
+/// Which media backend a stored server speaks. Mirrors `fin_media::ServerKind`;
+/// duplicated here to keep fin-config as a leaf crate with zero player deps.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerKind {
+    #[default]
+    Jellyfin,
+    Subsonic,
+}
+
+impl ServerKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Jellyfin => "jellyfin",
+            Self::Subsonic => "subsonic",
+        }
+    }
 }
 
 /// The old, single-server shape we used before multi-server support landed.
@@ -117,6 +140,9 @@ impl From<LegacyServerConfig> for ServerConfig {
             user_name: l.user_name,
             access_token: l.access_token,
             device_id: l.device_id,
+            // Legacy configs pre-date multi-backend support — they were
+            // always Jellyfin.
+            server_kind: ServerKind::Jellyfin,
         }
     }
 }
@@ -457,6 +483,7 @@ mod tests {
             user_name: "user".into(),
             access_token: "tok".into(),
             device_id: "dev".into(),
+            server_kind: ServerKind::default(),
         }
     }
 

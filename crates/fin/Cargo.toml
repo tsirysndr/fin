@@ -25,5 +25,6 @@ rpassword.workspace = true
 rustls.workspace = true
 fin-config.workspace = true
 fin-jellyfin.workspace = true
+fin-media.workspace = true
 fin-player.workspace = true
 fin-tui.workspace = true

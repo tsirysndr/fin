@@ -40,7 +40,9 @@ rpassword = "7"
 
 fin-config = { path = "crates/fin-config" }
 fin-jellyfin = { path = "crates/fin-jellyfin" }
+fin-media = { path = "crates/fin-media" }
 fin-player = { path = "crates/fin-player" }
+fin-subsonic = { path = "crates/fin-subsonic" }
 fin-tui = { path = "crates/fin-tui" }
 
 [profile.release]

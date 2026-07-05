@@ -21,6 +21,7 @@ use tracing::warn;
 
 use fin_config::{Config, RendererPref};
 use fin_jellyfin::{BaseItem, ItemKind, JellyfinClient, StreamFormat};
+use fin_media::MediaClient;
 use fin_player::{
     discover_chromecasts, discover_upnp_renderers, CastDevice, ChromecastRenderer, LocalRenderer,
     PlaybackState, QueueItem, Renderer, RendererKind, UpnpDevice, UpnpRenderer,
@@ -77,7 +78,7 @@ use crate::widgets::{neon_block, EqSliders, HelpModal, NeonTabs, PlayerBar};
 /// Everything the render loop needs.
 pub struct App {
     pub config: Arc<Mutex<Config>>,
-    pub jellyfin: Arc<Mutex<Arc<JellyfinClient>>>,
+    pub jellyfin: Arc<Mutex<Arc<dyn MediaClient>>>,
     pub renderer: Arc<Mutex<Arc<dyn Renderer>>>,
     pub renderer_kind: Arc<Mutex<RendererKind>>,
     pub renderer_label: Arc<Mutex<String>>,
@@ -107,12 +108,21 @@ pub struct App {
     /// Toggled by `?`. When true, every other key is swallowed by the modal
     /// and the underlying UI is dimmed by the popup's own background fill.
     help_open: bool,
+    /// Scrobble bookkeeping — the item id we last told the server about,
+    /// plus the moment we sent the last progress ping so we can throttle.
+    scrobble_reported_id: Option<String>,
+    scrobble_last_progress: Instant,
+    scrobble_session_id: String,
     should_quit: bool,
     logo_pulse: u8,
 }
 
 impl App {
-    pub fn new(config: Config, jellyfin: JellyfinClient, renderer: Arc<dyn Renderer>) -> Self {
+    pub fn new(
+        config: Config,
+        jellyfin: Arc<dyn MediaClient>,
+        renderer: Arc<dyn Renderer>,
+    ) -> Self {
         let kind = renderer.kind();
         let label = match kind {
             RendererKind::Mpv => "this machine".into(),
@@ -123,7 +133,7 @@ impl App {
         list_state.select(Some(0));
         Self {
             config: Arc::new(Mutex::new(config)),
-            jellyfin: Arc::new(Mutex::new(Arc::new(jellyfin))),
+            jellyfin: Arc::new(Mutex::new(jellyfin)),
             renderer: Arc::new(Mutex::new(renderer)),
             renderer_kind: Arc::new(Mutex::new(kind)),
             renderer_label: Arc::new(Mutex::new(label)),
@@ -147,6 +157,11 @@ impl App {
             playback_state: Arc::new(Mutex::new(PlaybackState::default())),
             eq_selected_band: 0,
             help_open: false,
+            scrobble_reported_id: None,
+            scrobble_last_progress: Instant::now(),
+            // One session id per fin process — Jellyfin uses it to correlate
+            // Start / Progress / Stopped events, Subsonic ignores it.
+            scrobble_session_id: uuid::Uuid::new_v4().to_string(),
             should_quit: false,
             logo_pulse: 0,
         }
@@ -154,7 +169,7 @@ impl App {
 
     /// Handy accessor — the current Jellyfin client. Swapped out atomically
     /// when the user switches servers.
-    fn jf(&self) -> Arc<JellyfinClient> {
+    fn jf(&self) -> Arc<dyn MediaClient> {
         self.jellyfin.lock().clone()
     }
 
@@ -757,13 +772,15 @@ impl App {
         let Some(server) = server else {
             return Err(anyhow!("no active server after switch"));
         };
-        let client = JellyfinClient::with_credentials(
+        let client = fin_media::client_from_stored(
+            server.server_kind,
             &server.url,
             &server.device_id,
             &server.user_id,
+            &server.user_name,
             &server.access_token,
         )?;
-        *self.jellyfin.lock() = Arc::new(client);
+        *self.jellyfin.lock() = client;
         // Clear cached content — belongs to the *previous* server.
         self.music_items.lock().clear();
         self.video_items.lock().clear();
@@ -853,6 +870,8 @@ async fn event_loop(
         // Refresh live playback state each tick.
         *app.playback_state.lock() = app.renderer.lock().state();
 
+        emit_scrobble_events(app).await;
+
         terminal.draw(|f| draw(f, app))?;
 
         if let Some(ev) = events.recv().await {
@@ -868,6 +887,170 @@ async fn event_loop(
         }
     }
     Ok(())
+}
+
+/// Emit Jellyfin session events / Subsonic scrobbles for track transitions.
+/// Detects three edges from `playback_state`:
+/// - `now_playing` changed to a new item → `report_stopped` on the old one,
+///   `report_started` on the new one.
+/// - Same item still playing → send `report_progress` every ~10 s (Jellyfin;
+///   Subsonic's default impl is a no-op).
+/// - Track dropped to None → `report_stopped` on whatever was reported.
+///
+/// Every network call is a best-effort spawn: failure is logged and the
+/// TUI keeps drawing. Reports only fire for audio items — Chromecast and
+/// UPnP receivers already send their own session events server-side.
+async fn emit_scrobble_events(app: &mut App) {
+    let state = app.playback_state.lock().clone();
+    let session_id = app.scrobble_session_id.clone();
+    let client = app.jellyfin.lock().clone();
+    let renderer_kind = *app.renderer_kind.lock();
+    // Only report for local audio playback — remote renderers manage their
+    // own reporting on the server side.
+    if !matches!(renderer_kind, fin_player::RendererKind::Mpv) {
+        return;
+    }
+
+    let now_playing_id = state
+        .now_playing
+        .as_ref()
+        .filter(|it| !it.is_video)
+        .map(|it| it.id.clone());
+
+    match (&app.scrobble_reported_id, &now_playing_id) {
+        (Some(prev), Some(cur)) if prev == cur => {
+            // Same track — throttled progress ping.
+            if state.status == fin_player::PlaybackStatus::Playing
+                && app.scrobble_last_progress.elapsed() >= Duration::from_secs(10)
+            {
+                if let Some(item) = state.now_playing.as_ref() {
+                    let base_item = queue_item_to_base_item(item);
+                    let client = client.clone();
+                    let session_id = session_id.clone();
+                    let pos = state.position_secs.max(0.0) as u64;
+                    tokio::spawn(async move {
+                        if let Err(e) = client
+                            .report_progress(&base_item, pos, false, &session_id)
+                            .await
+                        {
+                            warn!(?e, "scrobble progress failed");
+                        }
+                    });
+                    app.scrobble_last_progress = Instant::now();
+                }
+            }
+        }
+        (prev_opt, Some(cur)) => {
+            // Track transition: stop the previous, start the new.
+            if let Some(prev_id) = prev_opt.clone() {
+                let client_c = client.clone();
+                let session_id_c = session_id.clone();
+                let stopped_pos = state.position_secs.max(0.0) as u64;
+                let stub = BaseItem {
+                    id: prev_id.clone(),
+                    name: prev_id,
+                    type_: "Audio".into(),
+                    album: None,
+                    album_id: None,
+                    album_artist: None,
+                    artists: None,
+                    series_name: None,
+                    production_year: None,
+                    run_time_ticks: None,
+                    media_type: Some("Audio".into()),
+                    container: None,
+                    index_number: None,
+                    parent_index_number: None,
+                    image_tags: None,
+                    is_folder: Some(false),
+                    overview: None,
+                };
+                tokio::spawn(async move {
+                    if let Err(e) = client_c
+                        .report_stopped(&stub, stopped_pos, &session_id_c)
+                        .await
+                    {
+                        warn!(?e, "scrobble stopped failed");
+                    }
+                });
+            }
+            let item = state.now_playing.as_ref().unwrap();
+            let base_item = queue_item_to_base_item(item);
+            let client_c = client.clone();
+            let session_id_c = session_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client_c.report_started(&base_item, &session_id_c).await {
+                    warn!(?e, "scrobble started failed");
+                }
+            });
+            app.scrobble_reported_id = Some(cur.clone());
+            app.scrobble_last_progress = Instant::now();
+        }
+        (Some(prev_id), None) => {
+            // Playback ended — fire the closing report.
+            let prev_id = prev_id.clone();
+            let client_c = client.clone();
+            let session_id_c = session_id.clone();
+            let stopped_pos = state.position_secs.max(0.0) as u64;
+            let stub = BaseItem {
+                id: prev_id.clone(),
+                name: prev_id,
+                type_: "Audio".into(),
+                album: None,
+                album_id: None,
+                album_artist: None,
+                artists: None,
+                series_name: None,
+                production_year: None,
+                run_time_ticks: None,
+                media_type: Some("Audio".into()),
+                container: None,
+                index_number: None,
+                parent_index_number: None,
+                image_tags: None,
+                is_folder: Some(false),
+                overview: None,
+            };
+            tokio::spawn(async move {
+                if let Err(e) = client_c
+                    .report_stopped(&stub, stopped_pos, &session_id_c)
+                    .await
+                {
+                    warn!(?e, "scrobble stopped failed");
+                }
+            });
+            app.scrobble_reported_id = None;
+        }
+        (None, None) => {}
+    }
+}
+
+/// Adapt a `QueueItem` (what the renderer holds) into a `BaseItem` for the
+/// scrobble APIs. The id is all any server actually needs to correlate.
+fn queue_item_to_base_item(q: &fin_player::QueueItem) -> BaseItem {
+    BaseItem {
+        id: q.id.clone(),
+        name: q.title.clone(),
+        type_: if q.is_video { "Video".into() } else { "Audio".into() },
+        album: None,
+        album_id: None,
+        album_artist: None,
+        artists: if q.subtitle.is_empty() {
+            None
+        } else {
+            Some(vec![q.subtitle.clone()])
+        },
+        series_name: None,
+        production_year: None,
+        run_time_ticks: q.duration_secs.map(|s| (s * 10_000_000) as i64),
+        media_type: Some(if q.is_video { "Video".into() } else { "Audio".into() }),
+        container: None,
+        index_number: None,
+        parent_index_number: None,
+        image_tags: None,
+        is_folder: Some(false),
+        overview: None,
+    }
 }
 
 async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {

@@ -123,9 +123,26 @@ impl RowLayout {
 
 /// Build a row for a list-of-items view using the shared `RowLayout` so
 /// every row's columns land at the same character positions.
-pub fn item_row_line<'a>(item: &'a BaseItem, selected: bool, layout: RowLayout) -> Line<'a> {
-    let icon = item.kind().icon();
-    let (icon_fg, main_style) = if selected {
+///
+/// `now_playing` swaps the icon for a ▶ marker and paints the row in the
+/// highlight color — distinct from `selected`, which reflects the cursor.
+/// The Queue screen uses both: cursor for the row the user is inspecting,
+/// now-playing for the track actually coming out of the speakers.
+pub fn item_row_line<'a>(
+    item: &'a BaseItem,
+    selected: bool,
+    now_playing: bool,
+    layout: RowLayout,
+) -> Line<'a> {
+    let icon = if now_playing { "▶" } else { item.kind().icon() };
+    let (icon_fg, main_style) = if now_playing {
+        (
+            Palette::HIGHLIGHT,
+            Style::default()
+                .fg(Palette::HIGHLIGHT)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if selected {
         (
             Palette::PRIMARY,
             Style::default()

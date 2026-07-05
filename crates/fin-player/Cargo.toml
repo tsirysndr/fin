@@ -28,3 +28,7 @@ fin-jellyfin.workspace = true
 symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
 cpal = "0.15"
 rb = "0.4"
+
+# Shuffle uses Fisher-Yates via `rand` — pulled in as a transitive dep
+# already, so this is a zero-cost explicit dep.
+rand = "0.9"

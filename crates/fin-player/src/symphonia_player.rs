@@ -27,6 +27,7 @@ use symphonia::core::units::{Time, TimeBase};
 use tracing::{debug, error, warn};
 
 use crate::queue::{PlaybackQueue, QueueItem};
+use crate::persist::{PersistedQueue, Persister};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 
 /// A local, audio-only renderer. Streams the HTTP body, decodes with symphonia,
@@ -57,21 +58,37 @@ enum PlayerCommand {
     Previous,
     Seek(f64),
     SetVolume(f32),
+    SetShuffle(bool),
+    SetRepeat(crate::queue::RepeatMode),
+    /// Populate queue + shuffle/repeat + pending seek from an on-disk
+    /// snapshot. Doesn't start playback — the next Resume/Play does.
+    Restore(PersistedQueue),
+    RemoveAt(usize),
     Quit,
 }
 
 impl SymphoniaPlayer {
     pub fn new() -> Self {
+        Self::with_persist(None)
+    }
+
+    /// Same as `new`, but with a queue-persistence path — the worker will
+    /// write a snapshot of the current queue + shuffle/repeat/position to
+    /// `path` on every relevant event.
+    pub fn with_persist(persist_path: Option<std::path::PathBuf>) -> Self {
         let queue = PlaybackQueue::new();
         let state = Arc::new(Mutex::new(PlaybackState::default()));
         let (cmd_tx, cmd_rx) = mpsc::channel::<PlayerCommand>();
+        let persister = persist_path.map(Persister::spawn);
 
         let worker_state = state.clone();
         let worker_queue = queue.clone();
+        let worker_persister = persister.clone();
         let worker = thread::Builder::new()
             .name("fin-symphonia".into())
             .spawn(move || {
-                if let Err(e) = run_worker(cmd_rx, worker_state, worker_queue) {
+                if let Err(e) = run_worker(cmd_rx, worker_state, worker_queue, worker_persister)
+                {
                     error!(error = ?e, "symphonia worker exited");
                 }
             })
@@ -146,6 +163,22 @@ impl Renderer for SymphoniaPlayer {
 
     async fn set_volume(&self, volume: f32) -> Result<()> {
         self.send(PlayerCommand::SetVolume(volume))
+    }
+
+    async fn set_shuffle(&self, on: bool) -> Result<()> {
+        self.send(PlayerCommand::SetShuffle(on))
+    }
+
+    async fn set_repeat(&self, mode: crate::queue::RepeatMode) -> Result<()> {
+        self.send(PlayerCommand::SetRepeat(mode))
+    }
+
+    async fn restore(&self, snapshot: PersistedQueue) -> Result<()> {
+        self.send(PlayerCommand::Restore(snapshot))
+    }
+
+    async fn remove_from_queue(&self, index: usize) -> Result<()> {
+        self.send(PlayerCommand::RemoveAt(index))
     }
 
     fn state(&self) -> PlaybackState {
@@ -527,12 +560,19 @@ fn run_worker(
     rx: mpsc::Receiver<PlayerCommand>,
     state: Arc<Mutex<PlaybackState>>,
     queue: PlaybackQueue,
+    persister: Option<Persister>,
 ) -> Result<()> {
     let host = cpal::default_host();
     let volume = Arc::new(AtomicU32::new(f32::to_bits(1.0)));
     let paused = Arc::new(AtomicBool::new(false));
 
     let mut track: Option<Track> = None;
+    // Playhead position we still owe to a freshly-loaded track, e.g. from a
+    // restored queue. Consumed the first time we load a track after being
+    // set, then cleared.
+    let mut pending_seek: Option<f64> = None;
+    // Rate-limit position-only persist writes.
+    let mut last_position_persist = Instant::now();
 
     'main: loop {
         // Consume commands. If nothing's playing, block; otherwise poll.
@@ -557,10 +597,19 @@ fn run_worker(
                     sync_queue_meta(&state, &queue);
                     paused.store(false, Ordering::Relaxed);
                     if let Some(item) = queue.current() {
-                        track = try_load_track(&host, item, &volume, &paused, &state, &queue);
+                        track = load_and_maybe_seek(
+                            &host,
+                            item,
+                            &volume,
+                            &paused,
+                            &state,
+                            &queue,
+                            &mut pending_seek,
+                        );
                     } else {
                         mark_idle(&state);
                     }
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::Enqueue(items) => {
                     let was_empty = queue.is_empty();
@@ -568,10 +617,18 @@ fn run_worker(
                     sync_queue_meta(&state, &queue);
                     if was_empty && track.is_none() {
                         if let Some(item) = queue.current() {
-                            track =
-                                try_load_track(&host, item, &volume, &paused, &state, &queue);
+                            track = load_and_maybe_seek(
+                                &host,
+                                item,
+                                &volume,
+                                &paused,
+                                &state,
+                                &queue,
+                                &mut pending_seek,
+                            );
                         }
                     }
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::PlayNext(items) => {
                     let was_empty = queue.is_empty();
@@ -579,10 +636,18 @@ fn run_worker(
                     sync_queue_meta(&state, &queue);
                     if was_empty && track.is_none() {
                         if let Some(item) = queue.current() {
-                            track =
-                                try_load_track(&host, item, &volume, &paused, &state, &queue);
+                            track = load_and_maybe_seek(
+                                &host,
+                                item,
+                                &volume,
+                                &paused,
+                                &state,
+                                &queue,
+                                &mut pending_seek,
+                            );
                         }
                     }
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::Pause => {
                     paused.store(true, Ordering::Relaxed);
@@ -590,9 +655,27 @@ fn run_worker(
                     if s.now_playing.is_some() {
                         s.status = PlaybackStatus::Paused;
                     }
+                    drop(s);
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::Resume => {
                     paused.store(false, Ordering::Relaxed);
+                    // If we're idle but the queue has a current item (e.g.
+                    // just after a restore), start playing it now. Any
+                    // pending_seek from restore is applied on load.
+                    if track.is_none() {
+                        if let Some(item) = queue.current() {
+                            track = load_and_maybe_seek(
+                                &host,
+                                item,
+                                &volume,
+                                &paused,
+                                &state,
+                                &queue,
+                                &mut pending_seek,
+                            );
+                        }
+                    }
                     let mut s = state.lock();
                     if s.now_playing.is_some() {
                         s.status = PlaybackStatus::Playing;
@@ -601,6 +684,7 @@ fn run_worker(
                 PlayerCommand::Stop => {
                     stop_current(&mut track);
                     queue.clear();
+                    pending_seek = None;
                     let mut s = state.lock();
                     s.queue.clear();
                     s.current_index = None;
@@ -608,39 +692,149 @@ fn run_worker(
                     s.status = PlaybackStatus::Stopped;
                     s.position_secs = 0.0;
                     s.duration_secs = 0.0;
+                    drop(s);
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::Next => {
                     stop_current(&mut track);
                     queue.advance();
                     sync_queue_meta(&state, &queue);
                     if let Some(item) = queue.current() {
-                        track = try_load_track(&host, item, &volume, &paused, &state, &queue);
+                        track = load_and_maybe_seek(
+                            &host,
+                            item,
+                            &volume,
+                            &paused,
+                            &state,
+                            &queue,
+                            &mut pending_seek,
+                        );
                     } else {
                         mark_idle(&state);
                     }
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::Previous => {
                     stop_current(&mut track);
                     queue.back();
                     sync_queue_meta(&state, &queue);
                     if let Some(item) = queue.current() {
-                        track = try_load_track(&host, item, &volume, &paused, &state, &queue);
+                        track = load_and_maybe_seek(
+                            &host,
+                            item,
+                            &volume,
+                            &paused,
+                            &state,
+                            &queue,
+                            &mut pending_seek,
+                        );
                     } else {
                         mark_idle(&state);
                     }
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::Seek(pos_secs) => {
                     if let Some(ref mut t) = track {
                         seek_track(t, pos_secs);
+                    } else {
+                        // No track yet — record for the next load (used after Restore).
+                        pending_seek = Some(pos_secs.max(0.0));
                     }
+                    persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::SetVolume(v) => {
                     let clamped = v.clamp(0.0, 1.5);
                     volume.store(f32::to_bits(clamped), Ordering::Relaxed);
                     state.lock().volume = clamped;
                 }
+                PlayerCommand::SetShuffle(on) => {
+                    queue.set_shuffle(on);
+                    sync_queue_meta(&state, &queue);
+                    persist_now(&persister, &queue, &state);
+                }
+                PlayerCommand::SetRepeat(mode) => {
+                    queue.set_repeat(mode);
+                    sync_queue_meta(&state, &queue);
+                    persist_now(&persister, &queue, &state);
+                }
+                PlayerCommand::Restore(snapshot) => {
+                    stop_current(&mut track);
+                    // Filter to audio-only — video items in a saved queue are
+                    // legitimate but the SymphoniaPlayer can't play them. The
+                    // LocalRenderer's dispatcher already partitions on load.
+                    let audio_items: Vec<QueueItem> = snapshot
+                        .items
+                        .iter()
+                        .filter(|i| !i.is_video)
+                        .cloned()
+                        .collect();
+                    if !audio_items.is_empty() {
+                        // Remap the saved index into the filtered list.
+                        let target_id = snapshot
+                            .current_index
+                            .and_then(|i| snapshot.items.get(i))
+                            .map(|it| it.id.clone());
+                        let new_idx = target_id
+                            .and_then(|id| audio_items.iter().position(|it| it.id == id))
+                            .unwrap_or(0);
+                        queue.replace(audio_items, new_idx);
+                    }
+                    queue.set_shuffle(snapshot.shuffle);
+                    queue.set_repeat(snapshot.repeat);
+                    pending_seek = if snapshot.position_secs > 0.0 {
+                        Some(snapshot.position_secs)
+                    } else {
+                        None
+                    };
+                    sync_queue_meta(&state, &queue);
+                    // Restore leaves playback paused so the user hits Space
+                    // when they're ready. The pending_seek is applied to
+                    // whichever track loads next.
+                    paused.store(true, Ordering::Relaxed);
+                    let mut s = state.lock();
+                    s.status = PlaybackStatus::Paused;
+                    s.position_secs = snapshot.position_secs;
+                    drop(s);
+                    // Do NOT overwrite the snapshot on restore itself.
+                }
+                PlayerCommand::RemoveAt(idx) => {
+                    let cur = queue.current_index();
+                    let removing_current = cur == Some(idx);
+                    queue.remove(idx);
+                    sync_queue_meta(&state, &queue);
+                    if removing_current {
+                        // Was playing this exact track — stop it and load
+                        // whatever the new current is, or go idle.
+                        stop_current(&mut track);
+                        pending_seek = None;
+                        if let Some(item) = queue.current() {
+                            track = load_and_maybe_seek(
+                                &host,
+                                item,
+                                &volume,
+                                &paused,
+                                &state,
+                                &queue,
+                                &mut pending_seek,
+                            );
+                        } else {
+                            mark_idle(&state);
+                        }
+                    }
+                    persist_now(&persister, &queue, &state);
+                }
                 PlayerCommand::Quit => break 'main,
             }
+        }
+
+        // Once every ~3 s while playing, checkpoint the current position so
+        // a crash / kill leaves us close to where we were.
+        if track.is_some()
+            && !paused.load(Ordering::Relaxed)
+            && last_position_persist.elapsed() >= Duration::from_secs(3)
+        {
+            persist_now(&persister, &queue, &state);
+            last_position_persist = Instant::now();
         }
 
         // Decode one packet's worth of audio if we can.
@@ -666,16 +860,24 @@ fn run_worker(
                 }
                 DecodeStep::EndOfStream => {
                     debug!(item = %t.item.title, "track ended");
-                    // Let the ring buffer drain so the last audio isn't cut off.
                     drain_ring(t);
                     stop_current(&mut track);
                     queue.advance();
                     sync_queue_meta(&state, &queue);
                     if let Some(item) = queue.current() {
-                        track = try_load_track(&host, item, &volume, &paused, &state, &queue);
+                        track = load_and_maybe_seek(
+                            &host,
+                            item,
+                            &volume,
+                            &paused,
+                            &state,
+                            &queue,
+                            &mut pending_seek,
+                        );
                     } else {
                         mark_idle(&state);
                     }
+                    persist_now(&persister, &queue, &state);
                 }
                 DecodeStep::Error(e) => {
                     warn!(error = %e, item = %t.item.title, "decode error, skipping track");
@@ -683,16 +885,27 @@ fn run_worker(
                     queue.advance();
                     sync_queue_meta(&state, &queue);
                     if let Some(item) = queue.current() {
-                        track = try_load_track(&host, item, &volume, &paused, &state, &queue);
+                        track = load_and_maybe_seek(
+                            &host,
+                            item,
+                            &volume,
+                            &paused,
+                            &state,
+                            &queue,
+                            &mut pending_seek,
+                        );
                     } else {
                         mark_idle(&state);
                     }
+                    persist_now(&persister, &queue, &state);
                 }
             }
         }
     }
 
     stop_current(&mut track);
+    // Flush one final snapshot so the exit position is persisted.
+    persist_now(&persister, &queue, &state);
     Ok(())
 }
 
@@ -826,10 +1039,58 @@ fn mark_idle(state: &Arc<Mutex<PlaybackState>>) {
 fn sync_queue_meta(state: &Arc<Mutex<PlaybackState>>, queue: &PlaybackQueue) {
     let items = queue.items();
     let idx = queue.current_index();
+    let shuffle = queue.shuffle_enabled();
+    let repeat = queue.repeat_mode();
     let mut s = state.lock();
     s.queue = items.clone();
     s.current_index = idx;
     s.now_playing = idx.and_then(|i| items.get(i).cloned());
+    s.shuffle = shuffle;
+    s.repeat = repeat;
+}
+
+/// Send the current queue + state to the background persister. Cheap enough
+/// to call from every mutating command handler; the persister debounces
+/// bursts into a single write.
+fn persist_now(
+    persister: &Option<Persister>,
+    queue: &PlaybackQueue,
+    state: &Arc<Mutex<PlaybackState>>,
+) {
+    if let Some(p) = persister {
+        let s = state.lock();
+        let snap = PersistedQueue {
+            items: queue.items(),
+            current_index: queue.current_index(),
+            shuffle: queue.shuffle_enabled(),
+            repeat: queue.repeat_mode(),
+            position_secs: s.position_secs,
+        };
+        drop(s);
+        p.queue_write(snap);
+    }
+}
+
+/// Load a track and, if a `pending_seek` is pending (e.g. from a restore),
+/// apply it once. Returns None if loading failed after skipping the entire
+/// remaining queue.
+fn load_and_maybe_seek(
+    host: &cpal::Host,
+    item: QueueItem,
+    volume: &Arc<AtomicU32>,
+    paused: &Arc<AtomicBool>,
+    state: &Arc<Mutex<PlaybackState>>,
+    queue: &PlaybackQueue,
+    pending_seek: &mut Option<f64>,
+) -> Option<Track> {
+    let mut track = try_load_track(host, item, volume, paused, state, queue)?;
+    if let Some(secs) = pending_seek.take() {
+        if secs > 0.0 {
+            seek_track(&mut track, secs);
+            state.lock().position_secs = secs;
+        }
+    }
+    Some(track)
 }
 
 fn update_position(state: &Arc<Mutex<PlaybackState>>, t: &Track) {

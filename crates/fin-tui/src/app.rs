@@ -441,6 +441,27 @@ impl App {
         }
     }
 
+    /// Delete the highlighted entry from the queue. If it's the item being
+    /// played, playback jumps to the next entry (or stops if the queue is
+    /// now empty); otherwise the currently-playing track keeps going and
+    /// only the surrounding queue shrinks.
+    async fn remove_selected_from_queue(&self) {
+        let Some(idx) = self.list_state.selected() else {
+            return;
+        };
+        let items = self.playback_state.lock().queue.clone();
+        if items.is_empty() || idx >= items.len() {
+            self.set_status("Nothing to remove.");
+            return;
+        }
+        let title = items[idx].title.clone();
+        let renderer = self.renderer.lock().clone();
+        match renderer.remove_from_queue(idx).await {
+            Ok(()) => self.set_status(format!("− Removed “{}”", title)),
+            Err(e) => self.set_status(format!("remove: {}", e)),
+        }
+    }
+
     /// Enter on the Queue screen must NOT replace the queue with just the
     /// selected item. Instead, restart playback from the current queue's
     /// selected index — same items, new playhead.
@@ -711,8 +732,12 @@ impl App {
     }
 
     async fn switch_to_mpv(&self) {
-        // Local playback: audio → symphonia, video → mpv.
-        let renderer = LocalRenderer::new();
+        // Local playback: audio → symphonia, video → mpv. Persistence is
+        // wired in so switching to local while there's a saved queue picks
+        // it up on next restart (the current session keeps whatever queue
+        // was already active).
+        let queue_path = fin_config::queue_path().ok();
+        let renderer = LocalRenderer::with_persist(queue_path);
         let arc: Arc<dyn Renderer> = Arc::new(renderer);
         *self.renderer.lock() = arc;
         *self.renderer_kind.lock() = RendererKind::Mpv;
@@ -1007,6 +1032,33 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.cycle_server();
             app.load_screen().await;
         }
+        (KeyCode::Char('z'), _) => {
+            let renderer = app.renderer.lock().clone();
+            let current = renderer.state().shuffle;
+            let _ = renderer.set_shuffle(!current).await;
+            app.set_status(if current {
+                "Shuffle off"
+            } else {
+                "Shuffle on"
+            });
+        }
+        // Shift+R cycles repeat (`r` alone refreshes the screen; `l` is next).
+        (KeyCode::Char('R'), _) => {
+            let renderer = app.renderer.lock().clone();
+            let next = renderer.state().repeat.next();
+            let _ = renderer.set_repeat(next).await;
+            app.set_status(format!("Repeat: {}", next.label()));
+        }
+        // Queue-screen-only: `d` removes the highlighted entry, `Shift+C`
+        // clears the whole queue. Elsewhere these keys are inert.
+        (KeyCode::Char('d'), _) if app.screen == Screen::Queue => {
+            app.remove_selected_from_queue().await;
+        }
+        (KeyCode::Char('C'), _) if app.screen == Screen::Queue => {
+            let renderer = app.renderer.lock().clone();
+            let _ = renderer.stop().await;
+            app.set_status("Queue cleared.");
+        }
         _ => {}
     }
     Ok(())
@@ -1165,7 +1217,17 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             );
             draw_list_with_title(f, area, app, &title);
         }
-        Screen::Queue => draw_list(f, area, app, " ≡ Queue "),
+        Screen::Queue => {
+            let state = app.playback_state.lock().clone();
+            let total = state.queue.len();
+            let title = if total == 0 {
+                " ≡ Queue ".to_string()
+            } else {
+                let pos = state.current_index.map(|i| i + 1).unwrap_or(0);
+                format!(" ≡ Queue  ({}/{}) ", pos, total)
+            };
+            draw_list(f, area, app, &title);
+        }
     }
 }
 
@@ -1202,6 +1264,15 @@ fn draw_list_with_title(f: &mut Frame<'_>, area: Rect, app: &mut App, title: &st
         );
         return;
     }
+    // The Queue screen paints its currently-playing row with a distinct
+    // marker. Other screens leave `now_playing` false — they either aren't
+    // showing the queue (Music/Videos/Playlists browse the library) or don't
+    // have a stable notion of "currently playing" tied to the visible index.
+    let playing_idx = if app.screen == Screen::Queue {
+        app.playback_state.lock().current_index
+    } else {
+        None
+    };
     let items: Vec<ListItem> = items_data
         .iter()
         .enumerate()
@@ -1209,6 +1280,7 @@ fn draw_list_with_title(f: &mut Frame<'_>, area: Rect, app: &mut App, title: &st
             ListItem::new(item_row_line(
                 it,
                 Some(i) == app.list_state.selected(),
+                Some(i) == playing_idx,
                 layout,
             ))
         })
@@ -1485,7 +1557,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  space: pause  s: stop  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
+    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

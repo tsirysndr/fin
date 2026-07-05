@@ -184,7 +184,22 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
         RendererPref::Mpv => {
             // "Mpv" pref = local playback. Audio decodes in-process via
             // symphonia; video still shells out to mpv. See `LocalRenderer`.
-            let r = LocalRenderer::new();
+            let queue_path = fin_config::queue_path().ok();
+            let saved = queue_path
+                .as_ref()
+                .and_then(|p| fin_player::load_persisted_queue(p));
+            let r = LocalRenderer::with_persist(queue_path);
+            if let Some(snap) = saved {
+                if !snap.items.is_empty() {
+                    let items_n = snap.items.len();
+                    let pos = snap.position_secs;
+                    if let Err(e) = r.restore(snap).await {
+                        tracing::warn!(?e, "queue restore failed");
+                    } else {
+                        tracing::info!(items = items_n, position_secs = pos, "restored queue");
+                    }
+                }
+            }
             Ok((Arc::new(r), "this machine".to_string()))
         }
         RendererPref::Chromecast => {

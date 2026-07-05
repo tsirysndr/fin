@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 /// Everything a renderer needs to play a single item.
@@ -16,6 +17,36 @@ pub struct QueueItem {
     pub content_type: String,
 }
 
+/// How the queue behaves once the last item finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    One,
+    All,
+}
+
+impl RepeatMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::One => "one",
+            Self::All => "all",
+        }
+    }
+
+    /// Cycle order matches what users expect from most players:
+    /// off → all → one → off.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::All,
+            Self::All => Self::One,
+            Self::One => Self::Off,
+        }
+    }
+}
+
 /// A thread-safe playback queue. Both the TUI and renderers share the same
 /// queue snapshot; the renderer is the source of truth for the current index.
 #[derive(Debug, Clone, Default)]
@@ -27,6 +58,8 @@ pub struct PlaybackQueue {
 struct QueueInner {
     items: Vec<QueueItem>,
     index: Option<usize>,
+    shuffle: bool,
+    repeat: RepeatMode,
 }
 
 impl PlaybackQueue {
@@ -87,9 +120,13 @@ impl PlaybackQueue {
 
     pub fn advance(&self) -> Option<usize> {
         let mut g = self.inner.write();
-        let next = match g.index {
-            Some(i) if i + 1 < g.items.len() => Some(i + 1),
-            None if !g.items.is_empty() => Some(0),
+        let next = match (g.repeat, g.index) {
+            // Repeat-one: keep the playhead on the same track.
+            (RepeatMode::One, Some(i)) if i < g.items.len() => Some(i),
+            (_, Some(i)) if i + 1 < g.items.len() => Some(i + 1),
+            // Repeat-all: wrap around at the end.
+            (RepeatMode::All, _) if !g.items.is_empty() => Some(0),
+            (_, None) if !g.items.is_empty() => Some(0),
             _ => None,
         };
         g.index = next;
@@ -98,12 +135,58 @@ impl PlaybackQueue {
 
     pub fn back(&self) -> Option<usize> {
         let mut g = self.inner.write();
-        let prev = match g.index {
-            Some(i) if i > 0 => Some(i - 1),
+        let prev = match (g.repeat, g.index) {
+            (RepeatMode::One, Some(i)) => Some(i),
+            (_, Some(i)) if i > 0 => Some(i - 1),
+            // Repeat-all wraps to the end when Prev is hit at index 0.
+            (RepeatMode::All, Some(0)) if !g.items.is_empty() => Some(g.items.len() - 1),
             _ => g.index,
         };
         g.index = prev;
         prev
+    }
+
+    pub fn shuffle_enabled(&self) -> bool {
+        self.inner.read().shuffle
+    }
+
+    pub fn repeat_mode(&self) -> RepeatMode {
+        self.inner.read().repeat
+    }
+
+    pub fn set_repeat(&self, mode: RepeatMode) {
+        self.inner.write().repeat = mode;
+    }
+
+    /// Toggle shuffle. Turning shuffle ON reshuffles every item AFTER the
+    /// currently-playing one — the current item stays where it is so the
+    /// track doesn't jump. Turning shuffle OFF is a no-op on the order
+    /// (we don't stash the original permutation to restore).
+    pub fn set_shuffle(&self, on: bool) {
+        let mut g = self.inner.write();
+        g.shuffle = on;
+        if !on {
+            return;
+        }
+        let start = g.index.map(|i| i + 1).unwrap_or(0);
+        if start < g.items.len() {
+            let mut rng = rand::rng();
+            g.items[start..].shuffle(&mut rng);
+        }
+    }
+
+    /// Full-queue reshuffle — used on restore and by tests. Preserves the
+    /// current index by swapping the currently-playing item to position 0.
+    pub fn reshuffle_all(&self) {
+        let mut g = self.inner.write();
+        if g.items.is_empty() {
+            return;
+        }
+        let mut rng = rand::rng();
+        g.items.shuffle(&mut rng);
+        if let Some(_) = g.index {
+            g.index = Some(0);
+        }
     }
 
     pub fn set_index(&self, i: usize) {

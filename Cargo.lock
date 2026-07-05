@@ -656,6 +656,7 @@ dependencies = [
  "futures",
  "mdns-sd",
  "parking_lot",
+ "rand",
  "rb",
  "reqwest",
  "rust_cast",

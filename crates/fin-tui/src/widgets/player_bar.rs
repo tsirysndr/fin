@@ -5,7 +5,7 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Widget};
 
-use fin_player::{PlaybackState, PlaybackStatus, RendererKind};
+use fin_player::{PlaybackState, PlaybackStatus, RendererKind, RepeatMode};
 
 use crate::theme::{border_style, muted_style, title_style, Palette};
 
@@ -100,7 +100,37 @@ impl<'a> Widget for PlayerBar<'a> {
                     .add_modifier(Modifier::BOLD),
             ),
         ]);
+        // Compact "modes" glyph — only rendered when either mode is active.
+        // Colored when on / dim when off keeps the row balanced without
+        // gaining/losing columns as the user toggles.
+        let shuffle_span = Span::styled(
+            "⇄ ",
+            if self.state.shuffle {
+                Style::default()
+                    .fg(Palette::HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Palette::MUTED)
+            },
+        );
+        let (repeat_glyph, repeat_active) = match self.state.repeat {
+            RepeatMode::Off => ("↻", false),
+            RepeatMode::All => ("↻", true),
+            RepeatMode::One => ("↺", true),
+        };
+        let repeat_span = Span::styled(
+            format!("{} ", repeat_glyph),
+            if repeat_active {
+                Style::default()
+                    .fg(Palette::HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Palette::MUTED)
+            },
+        );
         let right_line = Line::from(vec![
+            shuffle_span,
+            repeat_span,
             Span::styled(
                 format!("♪ {}%   ", (self.state.volume * 100.0) as i32),
                 Style::default().fg(Palette::HIGHLIGHT),

@@ -136,6 +136,13 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(dirs.cache_dir().to_path_buf())
 }
 
+/// Where the persisted playback queue lives. Kept in the cache dir (not
+/// config) because it's ephemeral state — a stale file just means the user
+/// starts with an empty queue.
+pub fn queue_path() -> Result<PathBuf> {
+    Ok(cache_dir()?.join("queue.json"))
+}
+
 impl Config {
     pub fn load() -> Result<Self> {
         let path = config_path()?;

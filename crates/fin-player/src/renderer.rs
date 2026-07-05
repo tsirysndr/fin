@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::queue::QueueItem;
+use crate::persist::PersistedQueue;
+use crate::queue::{QueueItem, RepeatMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -22,6 +23,10 @@ pub struct PlaybackState {
     pub now_playing: Option<QueueItem>,
     pub queue: Vec<QueueItem>,
     pub current_index: Option<usize>,
+    #[serde(default)]
+    pub shuffle: bool,
+    #[serde(default)]
+    pub repeat: RepeatMode,
 }
 
 impl Default for PlaybackState {
@@ -34,6 +39,8 @@ impl Default for PlaybackState {
             now_playing: None,
             queue: Vec::new(),
             current_index: None,
+            shuffle: false,
+            repeat: RepeatMode::Off,
         }
     }
 }
@@ -79,6 +86,33 @@ pub trait Renderer: Send + Sync {
     async fn previous(&self) -> anyhow::Result<()>;
     async fn seek(&self, position_secs: f64) -> anyhow::Result<()>;
     async fn set_volume(&self, volume: f32) -> anyhow::Result<()>;
+
+    /// Turn shuffle on or off. Default is a no-op — Chromecast and UPnP
+    /// renderers have their own device-side queue models that we haven't
+    /// wired shuffle into yet.
+    async fn set_shuffle(&self, _on: bool) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Set the repeat mode. See `set_shuffle` for why the default is a no-op.
+    async fn set_repeat(&self, _mode: RepeatMode) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Populate the queue + playhead from a persisted snapshot without
+    /// starting playback. The next `resume()` (or explicit `play`) kicks
+    /// the loaded track, seeking to `snapshot.position_secs` on load.
+    async fn restore(&self, _snapshot: PersistedQueue) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Remove one entry from the queue by index without disrupting the
+    /// currently-playing track — unless that item is the one being removed,
+    /// in which case playback advances to the next entry (or stops if the
+    /// queue is now empty). Default is a no-op.
+    async fn remove_from_queue(&self, _index: usize) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     fn state(&self) -> PlaybackState;
 }

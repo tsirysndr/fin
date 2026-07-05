@@ -5,6 +5,7 @@
 //! merged queue view so pause/next/prev/etc. hit whichever backend is
 //! currently sourcing sound to the speakers or pixels to the screen.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -13,7 +14,8 @@ use parking_lot::Mutex;
 use tracing::debug;
 
 use crate::mpv::MpvRenderer;
-use crate::queue::QueueItem;
+use crate::persist::PersistedQueue;
+use crate::queue::{QueueItem, RepeatMode};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 use crate::symphonia_player::SymphoniaPlayer;
 
@@ -33,8 +35,15 @@ pub struct LocalRenderer {
 
 impl LocalRenderer {
     pub fn new() -> Self {
+        Self::with_persist(None)
+    }
+
+    /// Build a LocalRenderer whose SymphoniaPlayer persists its queue to
+    /// `queue_path`. mpv's video queue is transient by design — a video
+    /// process spawns per session and doesn't persist.
+    pub fn with_persist(queue_path: Option<PathBuf>) -> Self {
         Self {
-            audio: Arc::new(SymphoniaPlayer::new()),
+            audio: Arc::new(SymphoniaPlayer::with_persist(queue_path)),
             video: Arc::new(MpvRenderer::new(None)),
             active: Arc::new(Mutex::new(Active::None)),
         }
@@ -237,6 +246,32 @@ impl Renderer for LocalRenderer {
         let _ = self.audio.set_volume(volume).await;
         let _ = self.video.set_volume(volume).await;
         Ok(())
+    }
+
+    async fn set_shuffle(&self, on: bool) -> Result<()> {
+        // Shuffle currently only affects the audio queue. mpv's video queue
+        // handles this differently and we haven't wired shuffle in there.
+        self.audio.set_shuffle(on).await
+    }
+
+    async fn set_repeat(&self, mode: RepeatMode) -> Result<()> {
+        self.audio.set_repeat(mode).await
+    }
+
+    async fn restore(&self, snapshot: PersistedQueue) -> Result<()> {
+        // Restore always goes to the audio path — that's where persistence
+        // lives. If the snapshot has video items they're dropped by the
+        // SymphoniaPlayer's Restore handler.
+        self.set_active(Active::Audio);
+        self.audio.restore(snapshot).await
+    }
+
+    async fn remove_from_queue(&self, index: usize) -> Result<()> {
+        match self.get_active() {
+            Active::Audio => self.audio.remove_from_queue(index).await,
+            Active::Video => self.video.remove_from_queue(index).await,
+            Active::None => Ok(()),
+        }
     }
 
     fn state(&self) -> PlaybackState {

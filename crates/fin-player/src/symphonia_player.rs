@@ -27,6 +27,7 @@ use symphonia::core::units::{Time, TimeBase};
 use tracing::{debug, error, warn};
 
 use crate::queue::{PlaybackQueue, QueueItem};
+use crate::crossfade::{fade_at, CrossfadeMode, CrossfadeSettings};
 use crate::persist::{PersistedQueue, Persister};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 use crate::replaygain::{ReplayGainInfo, ReplayGainSettings};
@@ -66,6 +67,7 @@ enum PlayerCommand {
     Restore(PersistedQueue),
     RemoveAt(usize),
     SetReplayGain(ReplayGainSettings),
+    SetCrossfade(CrossfadeSettings),
     Quit,
 }
 
@@ -185,6 +187,10 @@ impl Renderer for SymphoniaPlayer {
 
     async fn set_replaygain(&self, settings: ReplayGainSettings) -> Result<()> {
         self.send(PlayerCommand::SetReplayGain(settings))
+    }
+
+    async fn set_crossfade(&self, settings: CrossfadeSettings) -> Result<()> {
+        self.send(PlayerCommand::SetCrossfade(settings))
     }
 
     fn state(&self) -> PlaybackState {
@@ -423,6 +429,27 @@ struct Track {
     // currently-active settings resolve to. Recomputed on SetReplayGain.
     replaygain_info: ReplayGainInfo,
     replaygain_linear: f32,
+    // True once the decoder has returned EndOfStream (no more packets).
+    // Used by the crossfade path — we can't advance the queue on EOF
+    // anymore because that's the promotion step's job.
+    ended: bool,
+    // Set when this track is the "incoming" side of a crossfade. The push
+    // loop scales samples by fade_in(progress); progress is measured off
+    // this track's own produced_output_frames counter (which starts at 0).
+    // `Some(OverlapContext)` means "I'm fading in". None means "full gain".
+    overlap_incoming: Option<OverlapContext>,
+    // Same for the outgoing side. `start_frame` records
+    // `produced_output_frames` at overlap start so we can compute
+    // progress = (produced - start) / length.
+    overlap_outgoing: Option<OverlapContext>,
+}
+
+/// Per-frame fade envelope parameters. Baked in `push_samples_with_volume`.
+#[derive(Debug, Clone, Copy)]
+struct OverlapContext {
+    mode: CrossfadeMode,
+    length_frames: u64,
+    start_frame: u64,
 }
 
 impl Track {
@@ -585,6 +612,11 @@ fn run_worker(
     let mut last_position_persist = Instant::now();
     // Current ReplayGain settings — applied to each track we load.
     let mut rg_settings = ReplayGainSettings::default();
+    let mut xf_settings = CrossfadeSettings::default();
+    // The "incoming" track being preloaded during a crossfade overlap.
+    // `Some` only during an active overlap. When the fade-in completes,
+    // this promotes to `track` and the previous `track` is dropped.
+    let mut next: Option<Track> = None;
 
     'main: loop {
         // Consume commands. If nothing's playing, block; otherwise poll.
@@ -604,23 +636,88 @@ fn run_worker(
         if let Some(cmd) = cmd {
             match cmd {
                 PlayerCommand::Play { items, start_index } => {
-                    stop_current(&mut track);
+                    // If crossfade is active and something's playing, load
+                    // the new track as an incoming next and fade the old
+                    // one out — same feel as end-of-track crossfade.
+                    let can_crossfade = xf_settings.mode.is_active()
+                        && track
+                            .as_ref()
+                            .map(|t| !t.ended && !t.paused.load(Ordering::Relaxed))
+                            .unwrap_or(false);
+                    if let Some(nt) = next.take() {
+                        drop(nt);
+                    }
                     queue.replace(items, start_index);
                     sync_queue_meta(&state, &queue);
                     paused.store(false, Ordering::Relaxed);
-                    if let Some(item) = queue.current() {
-                        track = load_and_maybe_seek(
-                            &host,
-                            item,
-                            &volume,
-                            &paused,
-                            &state,
-                            &queue,
-                            &mut pending_seek,
-                            rg_settings,
-                        );
-                    } else {
-                        mark_idle(&state);
+                    pending_seek = None;
+
+                    match (can_crossfade, queue.current()) {
+                        (true, Some(item)) => {
+                            match load_track(
+                                &host,
+                                item.clone(),
+                                volume.clone(),
+                                paused.clone(),
+                                rg_settings,
+                            ) {
+                                Ok(mut nt) => {
+                                    let length_frames = (xf_settings.duration_secs as f64
+                                        * nt.output_sr as f64)
+                                        as u64;
+                                    let mode = xf_settings.mode;
+                                    let ct = track.as_mut().unwrap();
+                                    nt.overlap_incoming = Some(OverlapContext {
+                                        mode,
+                                        length_frames,
+                                        start_frame: 0,
+                                    });
+                                    ct.overlap_outgoing = Some(OverlapContext {
+                                        mode,
+                                        length_frames,
+                                        start_frame: ct.produced_output_frames,
+                                    });
+                                    debug!(
+                                        mode = ?mode,
+                                        length_frames,
+                                        title = %item.title,
+                                        "crossfade on user Play"
+                                    );
+                                    next = Some(nt);
+                                }
+                                Err(e) => {
+                                    warn!(?e, "crossfade Play preload failed; hard-cutting");
+                                    stop_current(&mut track);
+                                    track = load_and_maybe_seek(
+                                        &host,
+                                        item,
+                                        &volume,
+                                        &paused,
+                                        &state,
+                                        &queue,
+                                        &mut pending_seek,
+                                        rg_settings,
+                                    );
+                                }
+                            }
+                        }
+                        (false, Some(item)) => {
+                            stop_current(&mut track);
+                            track = load_and_maybe_seek(
+                                &host,
+                                item,
+                                &volume,
+                                &paused,
+                                &state,
+                                &queue,
+                                &mut pending_seek,
+                                rg_settings,
+                            );
+                        }
+                        (_, None) => {
+                            stop_current(&mut track);
+                            mark_idle(&state);
+                        }
                     }
                     persist_now(&persister, &queue, &state);
                 }
@@ -699,6 +796,9 @@ fn run_worker(
                 }
                 PlayerCommand::Stop => {
                     stop_current(&mut track);
+                    if let Some(nt) = next.take() {
+                        drop(nt);
+                    }
                     queue.clear();
                     pending_seek = None;
                     let mut s = state.lock();
@@ -712,7 +812,19 @@ fn run_worker(
                     persist_now(&persister, &queue, &state);
                 }
                 PlayerCommand::Next => {
+                    // If a crossfade is already ramping in, snap-promote it
+                    // instead of loading fresh. Feels responsive, and it
+                    // preserves the buffered next-track audio.
                     stop_current(&mut track);
+                    if let Some(mut nt) = next.take() {
+                        nt.overlap_incoming = None;
+                        nt.overlap_outgoing = None;
+                        track = Some(nt);
+                        queue.advance();
+                        sync_queue_meta(&state, &queue);
+                        persist_now(&persister, &queue, &state);
+                        continue;
+                    }
                     queue.advance();
                     sync_queue_meta(&state, &queue);
                     if let Some(item) = queue.current() {
@@ -733,6 +845,9 @@ fn run_worker(
                 }
                 PlayerCommand::Previous => {
                     stop_current(&mut track);
+                    if let Some(nt) = next.take() {
+                        drop(nt);
+                    }
                     queue.back();
                     sync_queue_meta(&state, &queue);
                     if let Some(item) = queue.current() {
@@ -820,8 +935,27 @@ fn run_worker(
                     if let Some(ref mut t) = track {
                         t.replaygain_linear = t.replaygain_info.linear_gain(settings);
                     }
+                    if let Some(ref mut nt) = next {
+                        nt.replaygain_linear = nt.replaygain_info.linear_gain(settings);
+                    }
                     state.lock().replaygain = settings;
                     persist_now(&persister, &queue, &state);
+                }
+                PlayerCommand::SetCrossfade(settings) => {
+                    xf_settings = settings;
+                    // If the mode was turned OFF mid-overlap, kill the
+                    // pending next track so we stop mixing. The current
+                    // track keeps playing normally.
+                    if !settings.mode.is_active() {
+                        if let Some(nt) = next.take() {
+                            drop(nt);
+                        }
+                        if let Some(ref mut t) = track {
+                            t.overlap_outgoing = None;
+                            t.overlap_incoming = None;
+                        }
+                    }
+                    state.lock().crossfade = settings;
                 }
                 PlayerCommand::RemoveAt(idx) => {
                     let cur = queue.current_index();
@@ -864,7 +998,8 @@ fn run_worker(
             last_position_persist = Instant::now();
         }
 
-        // Decode one packet's worth of audio if we can.
+        // Decode current — same shape as before, but doesn't advance on
+        // EOF anymore. That's now the promotion step's job (below).
         if let Some(ref mut t) = track {
             if t.paused.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(25));
@@ -872,63 +1007,160 @@ fn run_worker(
                 continue;
             }
 
-            // Backpressure: if the ring buffer is nearly full, don't decode.
-            // We need at least one MAX_FRAMES_PER_PACKET * channels slots free.
             let free = t.ring_free_slots();
-            if free < 8192 {
-                thread::sleep(Duration::from_millis(5));
-                update_position(&state, t);
-                continue;
+            if free >= 8192 && !t.ended {
+                match decode_one_packet(t) {
+                    DecodeStep::Pushed => update_position(&state, t),
+                    DecodeStep::EndOfStream => {
+                        debug!(item = %t.item.title, "current track ended");
+                        t.ended = true;
+                    }
+                    DecodeStep::Error(e) => {
+                        warn!(error = %e, item = %t.item.title, "current decode error");
+                        t.ended = true;
+                    }
+                }
             }
+        }
 
-            match decode_one_packet(t) {
-                DecodeStep::Pushed => {
-                    update_position(&state, t);
-                }
-                DecodeStep::EndOfStream => {
-                    debug!(item = %t.item.title, "track ended");
-                    drain_ring(t);
-                    stop_current(&mut track);
-                    queue.advance();
-                    sync_queue_meta(&state, &queue);
-                    if let Some(item) = queue.current() {
-                        track = load_and_maybe_seek(
-                            &host,
-                            item,
-                            &volume,
-                            &paused,
-                            &state,
-                            &queue,
-                            &mut pending_seek,
-                            rg_settings,
-                        );
-                    } else {
-                        mark_idle(&state);
+        // Decode next in parallel — it has its own ring buffer, so no
+        // backpressure conflict with current.
+        if let Some(ref mut nt) = next {
+            let free = nt.ring_free_slots();
+            if free >= 8192 && !nt.ended {
+                match decode_one_packet(nt) {
+                    DecodeStep::Pushed => {}
+                    DecodeStep::EndOfStream => nt.ended = true,
+                    DecodeStep::Error(e) => {
+                        warn!(error = %e, "crossfade next decode error");
+                        nt.ended = true;
                     }
-                    persist_now(&persister, &queue, &state);
-                }
-                DecodeStep::Error(e) => {
-                    warn!(error = %e, item = %t.item.title, "decode error, skipping track");
-                    stop_current(&mut track);
-                    queue.advance();
-                    sync_queue_meta(&state, &queue);
-                    if let Some(item) = queue.current() {
-                        track = load_and_maybe_seek(
-                            &host,
-                            item,
-                            &volume,
-                            &paused,
-                            &state,
-                            &queue,
-                            &mut pending_seek,
-                            rg_settings,
-                        );
-                    } else {
-                        mark_idle(&state);
-                    }
-                    persist_now(&persister, &queue, &state);
                 }
             }
+        }
+
+        // Should we trigger a crossfade preload? Only when:
+        // - a mode is selected
+        // - we don't already have a next track
+        // - the current track has a known duration
+        // - the remaining decoder-time is within the overlap window
+        if next.is_none() && xf_settings.mode.is_active() {
+            if let Some(ref mut ct) = track {
+                let duration = ct.duration_secs();
+                let decoded_secs = ct.produced_output_frames as f64 / ct.output_sr as f64;
+                let remaining = duration - decoded_secs;
+                if duration > 0.0 && remaining <= xf_settings.duration_secs as f64 && !ct.ended {
+                    if let Some(next_item) = queue.peek_next_item() {
+                        // Attempt to load next. On failure we silently skip
+                        // crossfade for this transition; the current track's
+                        // natural EOF path will handle end-of-stream.
+                        match load_track(
+                            &host,
+                            next_item.clone(),
+                            volume.clone(),
+                            paused.clone(),
+                            rg_settings,
+                        ) {
+                            Ok(mut nt) => {
+                                let length_frames = (xf_settings.duration_secs as f64
+                                    * nt.output_sr as f64)
+                                    as u64;
+                                let ctx = OverlapContext {
+                                    mode: xf_settings.mode,
+                                    length_frames,
+                                    start_frame: 0,
+                                };
+                                nt.overlap_incoming = Some(ctx);
+                                ct.overlap_outgoing = Some(OverlapContext {
+                                    mode: xf_settings.mode,
+                                    length_frames,
+                                    start_frame: ct.produced_output_frames,
+                                });
+                                debug!(
+                                    mode = ?xf_settings.mode,
+                                    length_frames,
+                                    next = %next_item.title,
+                                    "crossfade triggered"
+                                );
+                                next = Some(nt);
+                            }
+                            Err(e) => {
+                                warn!(?e, title = %next_item.title, "crossfade preload failed");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Promote next → current when the fade-in has completed OR when the
+        // outgoing track's fade-out has run its full length.
+        let should_promote = match (&track, &next) {
+            (Some(ct), Some(nt)) => {
+                let nt_progress_done = nt
+                    .overlap_incoming
+                    .map(|ctx| nt.produced_output_frames >= ctx.length_frames)
+                    .unwrap_or(false);
+                let ct_faded_out = ct
+                    .overlap_outgoing
+                    .map(|ctx| {
+                        ct.produced_output_frames >= ctx.start_frame + ctx.length_frames
+                    })
+                    .unwrap_or(false);
+                nt_progress_done || ct_faded_out || ct.ended
+            }
+            _ => false,
+        };
+        if should_promote {
+            debug!("crossfade complete, promoting next → current");
+            stop_current(&mut track);
+            if let Some(mut nt) = next.take() {
+                nt.overlap_incoming = None;
+                nt.overlap_outgoing = None;
+                track = Some(nt);
+                queue.advance();
+                sync_queue_meta(&state, &queue);
+                persist_now(&persister, &queue, &state);
+            }
+        }
+
+        // Current ended and there's no next to promote — advance the queue
+        // and load the next item straight (no crossfade).
+        let current_dry = track
+            .as_ref()
+            .map(|t| t.ended && t.ring_pending_frames() == 0)
+            .unwrap_or(false);
+        if current_dry && next.is_none() {
+            debug!("current track drained, advancing queue");
+            stop_current(&mut track);
+            queue.advance();
+            sync_queue_meta(&state, &queue);
+            if let Some(item) = queue.current() {
+                track = load_and_maybe_seek(
+                    &host,
+                    item,
+                    &volume,
+                    &paused,
+                    &state,
+                    &queue,
+                    &mut pending_seek,
+                    rg_settings,
+                );
+            } else {
+                mark_idle(&state);
+            }
+            persist_now(&persister, &queue, &state);
+        }
+
+        // If we didn't decode anything this tick, take a short nap to
+        // avoid pegging the CPU.
+        let idle = track.as_ref().map(|t| t.ended).unwrap_or(true)
+            || track
+                .as_ref()
+                .map(|t| t.ring_free_slots() < 8192)
+                .unwrap_or(true);
+        if idle {
+            thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -984,11 +1216,12 @@ fn decode_one_packet(t: &mut Track) -> DecodeStep {
 }
 
 fn push_samples_with_volume(t: &Track, samples: &[f32]) {
-    // Effective scale = user volume × ReplayGain linear multiplier.
-    // Combining them here keeps the sample loop a single multiply, and
-    // "volume" still behaves as a hard cap the user can always reach for.
-    let vol = f32::from_bits(t.volume.load(Ordering::Relaxed));
-    let effective = vol * t.replaygain_linear;
+    // Effective scale = user volume × ReplayGain linear multiplier ×
+    // per-frame fade envelope. Volume + RG are constant across the batch;
+    // the fade multiplier walks per output frame using this track's own
+    // produced_output_frames counter.
+    let base = f32::from_bits(t.volume.load(Ordering::Relaxed)) * t.replaygain_linear;
+    let ch = t.output_channels.max(1);
     let mut offset = 0;
     while offset < samples.len() {
         if t.paused.load(Ordering::Relaxed) {
@@ -996,12 +1229,49 @@ fn push_samples_with_volume(t: &Track, samples: &[f32]) {
             continue;
         }
         let end = std::cmp::min(offset + 4096, samples.len());
-        let chunk: Vec<f32> = samples[offset..end].iter().map(|s| s * effective).collect();
+        let src = &samples[offset..end];
+        let chunk: Vec<f32> = if t.overlap_outgoing.is_none() && t.overlap_incoming.is_none() {
+            // Fast path: no fade active.
+            src.iter().map(|s| s * base).collect()
+        } else {
+            let frames_in_chunk = src.len() / ch;
+            // frame index in the OUTPUT-frame timeline this chunk starts at.
+            let start_frame =
+                t.produced_output_frames + (offset / ch) as u64;
+            let mut out = Vec::with_capacity(src.len());
+            for f in 0..frames_in_chunk {
+                let global = start_frame + f as u64;
+                let fade_mult = fade_multiplier(t, global);
+                let mul = base * fade_mult;
+                for c in 0..ch {
+                    out.push(src[f * ch + c] * mul);
+                }
+            }
+            out
+        };
         match t.producer.write(&chunk) {
             Ok(n) => offset += n,
             Err(_) => thread::sleep(Duration::from_millis(5)),
         }
     }
+}
+
+/// Compute the fade multiplier this track should apply at output-frame
+/// `global`. Combines both directions when set — a track shouldn't normally
+/// have both simultaneously, but if it does they compose multiplicatively.
+fn fade_multiplier(t: &Track, global: u64) -> f32 {
+    let mut m = 1.0;
+    if let Some(ctx) = t.overlap_outgoing {
+        let relative = global.saturating_sub(ctx.start_frame);
+        let progress = relative as f32 / ctx.length_frames.max(1) as f32;
+        m *= fade_at(ctx.mode, progress).out;
+    }
+    if let Some(ctx) = t.overlap_incoming {
+        let relative = global.saturating_sub(ctx.start_frame);
+        let progress = relative as f32 / ctx.length_frames.max(1) as f32;
+        m *= fade_at(ctx.mode, progress).incoming;
+    }
+    m
 }
 
 fn seek_track(t: &mut Track, pos_secs: f64) {
@@ -1317,6 +1587,9 @@ fn load_track(
         _started: Instant::now(),
         replaygain_info,
         replaygain_linear,
+        ended: false,
+        overlap_incoming: None,
+        overlap_outgoing: None,
     };
     let first_out = resampler.process(&first_samples);
     if !first_out.is_empty() {

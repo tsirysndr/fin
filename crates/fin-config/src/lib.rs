@@ -28,6 +28,8 @@ pub struct Config {
     pub client: ClientInfo,
     #[serde(default)]
     pub replaygain: ReplayGainSettings,
+    #[serde(default)]
+    pub crossfade: CrossfadeSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +166,66 @@ fn default_replaygain_preamp_db() -> f32 {
 
 fn default_replaygain_prevent_clip() -> bool {
     true
+}
+
+/// How to blend adjacent tracks in the playback queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CrossfadeMode {
+    #[default]
+    Off,
+    /// Cosine/sine fade curves — outgoing fades out while incoming fades
+    /// in. Perceived loudness stays constant across the overlap.
+    Crossfade,
+    /// No fade — both tracks play at full volume during the overlap and
+    /// sum additively. Louder in the overlap window; sounds like a DJ mix.
+    Mixed,
+}
+
+impl CrossfadeMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Crossfade => "crossfade",
+            Self::Mixed => "mixed",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Crossfade,
+            Self::Crossfade => Self::Mixed,
+            Self::Mixed => Self::Off,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        !matches!(self, Self::Off)
+    }
+}
+
+/// Config-facing crossfade settings. Behavior (dual-track decode + mixing)
+/// lives in fin-player; this is just data.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CrossfadeSettings {
+    #[serde(default)]
+    pub mode: CrossfadeMode,
+    /// Overlap duration in seconds. Only meaningful when `mode` is active.
+    #[serde(default = "default_crossfade_secs")]
+    pub duration_secs: f32,
+}
+
+impl Default for CrossfadeSettings {
+    fn default() -> Self {
+        Self {
+            mode: CrossfadeMode::Off,
+            duration_secs: default_crossfade_secs(),
+        }
+    }
+}
+
+fn default_crossfade_secs() -> f32 {
+    5.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

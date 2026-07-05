@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 use tracing::debug;
 
 use crate::mpv::MpvRenderer;
+use crate::crossfade::CrossfadeSettings;
 use crate::persist::PersistedQueue;
 use crate::queue::{QueueItem, RepeatMode};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
@@ -279,6 +280,11 @@ impl Renderer for LocalRenderer {
         // ReplayGain is applied in the audio decode path — mpv has its own
         // separate volume model for video that we don't touch here.
         self.audio.set_replaygain(settings).await
+    }
+
+    async fn set_crossfade(&self, settings: CrossfadeSettings) -> Result<()> {
+        // Only audio-side has the dual-track crossfade wiring.
+        self.audio.set_crossfade(settings).await
     }
 
     fn state(&self) -> PlaybackState {

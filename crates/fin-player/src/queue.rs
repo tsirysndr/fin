@@ -146,6 +146,23 @@ impl PlaybackQueue {
         prev
     }
 
+    /// What would `advance()` land on, without mutating anything. Used by
+    /// the crossfade path to know which item to preload while the current
+    /// one is still winding down.
+    pub fn peek_next_item(&self) -> Option<QueueItem> {
+        let g = self.inner.read();
+        if g.items.is_empty() {
+            return None;
+        }
+        match (g.repeat, g.index) {
+            (RepeatMode::One, Some(i)) => g.items.get(i).cloned(),
+            (_, Some(i)) if i + 1 < g.items.len() => g.items.get(i + 1).cloned(),
+            (RepeatMode::All, Some(_)) => g.items.first().cloned(),
+            (_, None) => g.items.first().cloned(),
+            _ => None,
+        }
+    }
+
     pub fn shuffle_enabled(&self) -> bool {
         self.inner.read().shuffle
     }

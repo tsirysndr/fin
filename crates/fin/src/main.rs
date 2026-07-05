@@ -194,6 +194,9 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
             if let Err(e) = r.set_replaygain(cfg.replaygain).await {
                 tracing::warn!(?e, "replaygain apply failed");
             }
+            if let Err(e) = r.set_crossfade(cfg.crossfade).await {
+                tracing::warn!(?e, "crossfade apply failed");
+            }
             if let Some(snap) = saved {
                 if !snap.items.is_empty() {
                     let items_n = snap.items.len();

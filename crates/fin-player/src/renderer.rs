@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::crossfade::CrossfadeSettings;
 use crate::persist::PersistedQueue;
 use crate::queue::{QueueItem, RepeatMode};
 use crate::replaygain::ReplayGainSettings;
@@ -33,6 +34,8 @@ pub struct PlaybackState {
     /// query path.
     #[serde(default)]
     pub replaygain: ReplayGainSettings,
+    #[serde(default)]
+    pub crossfade: CrossfadeSettings,
 }
 
 impl Default for PlaybackState {
@@ -48,6 +51,7 @@ impl Default for PlaybackState {
             shuffle: false,
             repeat: RepeatMode::Off,
             replaygain: ReplayGainSettings::default(),
+            crossfade: CrossfadeSettings::default(),
         }
     }
 }
@@ -125,6 +129,13 @@ pub trait Renderer: Send + Sync {
     /// renderers currently no-op — device-side receivers apply their own
     /// loudness normalization.
     async fn set_replaygain(&self, _settings: ReplayGainSettings) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Update crossfade settings (mode + duration). Only the local
+    /// SymphoniaPlayer implements this; Chromecast + UPnP receivers each
+    /// manage their own track transitions.
+    async fn set_crossfade(&self, _settings: CrossfadeSettings) -> anyhow::Result<()> {
         Ok(())
     }
 

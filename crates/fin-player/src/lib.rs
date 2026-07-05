@@ -1,4 +1,5 @@
 pub mod cast;
+pub mod crossfade;
 pub mod discovery;
 pub mod local;
 pub mod mpv;
@@ -10,6 +11,7 @@ pub mod symphonia_player;
 pub mod upnp;
 
 pub use cast::ChromecastRenderer;
+pub use crossfade::{CrossfadeMode, CrossfadeSettings};
 pub use discovery::{discover_chromecasts, CastDevice};
 pub use local::LocalRenderer;
 pub use mpv::MpvRenderer;

@@ -138,10 +138,29 @@ impl<'a> Widget for PlayerBar<'a> {
         } else {
             Span::raw("")
         };
+        let xf_span = if self.state.crossfade.mode.is_active() {
+            let glyph = match self.state.crossfade.mode {
+                fin_player::CrossfadeMode::Crossfade => "⋈",
+                fin_player::CrossfadeMode::Mixed => "≈",
+                fin_player::CrossfadeMode::Off => unreachable!(),
+            };
+            Span::styled(
+                format!(
+                    "{} {:.0}s ",
+                    glyph, self.state.crossfade.duration_secs
+                ),
+                Style::default()
+                    .fg(Palette::HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw("")
+        };
         let right_line = Line::from(vec![
             shuffle_span,
             repeat_span,
             rg_span,
+            xf_span,
             Span::styled(
                 format!("♪ {}%   ", (self.state.volume * 100.0) as i32),
                 Style::default().fg(Palette::HIGHLIGHT),

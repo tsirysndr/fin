@@ -1622,7 +1622,7 @@ fn draw_header(f: &mut Frame<'_>, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "— a neon jellyfin client",
+            "— a neon jellyfin & subsonic client",
             Style::default().fg(subtitle_col),
         ),
         Span::styled(

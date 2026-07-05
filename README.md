@@ -2,12 +2,14 @@
 
 [![Release](https://github.com/tsirysndr/fin/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/fin/actions/workflows/release.yml)
 
-> a Jellyfin client for the terminal — powered by `symphonia`, `mpv`, Chromecast, and UPnP
+> a Jellyfin & Subsonic client for the terminal — powered by `symphonia`, `mpv`, Chromecast, and UPnP
 
-![fin — neon-electric Jellyfin TUI](.github/assets/preview.png)
+![fin — neon-electric Jellyfin/Subsonic TUI](.github/assets/preview.png)
 
-`fin` is a Rust TUI + one-shot CLI that talks to your Jellyfin server, searches
-your library, manages playlists, and pushes streams to your local machine
+`fin` is a Rust TUI + one-shot CLI that talks to your **Jellyfin** or
+**Subsonic** server (Navidrome, Airsonic, Gonic, Astiga, … — the flavour is
+auto-detected at login), searches your library, manages playlists, and pushes
+streams to your local machine
 (**symphonia** for audio, **mpv** for video), any **Chromecast** on your
 network, or any **UPnP MediaRenderer** (Sonos, Kodi, Roon endpoints, Samsung/LG
 TVs, gmediarender, …). Local playback is now audio-native — HTTP streaming,
@@ -280,8 +282,9 @@ Find the on-disk config with `fin config --path`; print it with
 
 ## Multiple servers
 
-fin authenticates against as many Jellyfin servers as you like and keeps
-their tokens side-by-side in one config file:
+fin authenticates against as many servers as you like — Jellyfin and
+Subsonic mixed freely — and keeps their credentials side-by-side in one
+config file:
 
 ```bash
 fin login https://home.example.com    --name home
@@ -354,7 +357,7 @@ Tab order — the default screen is **Music**:
 | `<` / `>` or `h` / `l`       | previous / next track               |
 | `+` / `-`                    | volume up / down                    |
 | `m`                          | switch to local renderer            |
-| `t`                          | cycle to the next saved Jellyfin server |
+| `t`                          | cycle to the next saved server      |
 | `d`                          | (Queue screen) remove the highlighted entry |
 | `Shift+C`                    | (Queue screen) clear the entire queue |
 | `Esc`                        | pop the current drill-in (back to the parent list) |

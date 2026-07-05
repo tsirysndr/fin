@@ -614,6 +614,13 @@ fn run_worker(
     // `Some` only during an active overlap. When the fade-in completes,
     // this promotes to `track` and the previous `track` is dropped.
     let mut next: Option<Track> = None;
+    // Whether the pending promotion should also `queue.advance()`. True for
+    // end-of-track preloads (the next-in-queue item was peeked but not yet
+    // committed). False for user-triggered Play/jump-to-queue crossfades,
+    // where `queue.replace()` has already positioned current_index at the
+    // incoming track — advancing again would shift the now-playing marker
+    // one row past the actual playing track.
+    let mut promote_advances_queue: bool = false;
 
     'main: loop {
         // Consume commands. If nothing's playing, block; otherwise poll.
@@ -680,6 +687,10 @@ fn run_worker(
                                         title = %item.title,
                                         "crossfade on user Play"
                                     );
+                                    // queue.replace(...) already positioned
+                                    // current_index at the incoming track,
+                                    // so promotion must NOT advance it.
+                                    promote_advances_queue = false;
                                     next = Some(nt);
                                 }
                                 Err(e) => {
@@ -817,7 +828,13 @@ fn run_worker(
                         nt.overlap_incoming = None;
                         nt.overlap_outgoing = None;
                         track = Some(nt);
-                        queue.advance();
+                        // Only advance the queue for end-approach overlaps
+                        // — Play-based overlaps already have current_index
+                        // pointing at the incoming track.
+                        if promote_advances_queue {
+                            queue.advance();
+                        }
+                        promote_advances_queue = false;
                         sync_queue_meta(&state, &queue);
                         persist_now(&persister, &queue, &state);
                         continue;
@@ -1078,6 +1095,10 @@ fn run_worker(
                                     next = %next_item.title,
                                     "crossfade triggered"
                                 );
+                                // End-approach preload — the peeked item is
+                                // NOT yet the queue's current, so promotion
+                                // must advance.
+                                promote_advances_queue = true;
                                 next = Some(nt);
                             }
                             Err(e) => {
@@ -1106,16 +1127,19 @@ fn run_worker(
             _ => false,
         };
         if should_promote {
-            debug!("crossfade complete, promoting next → current");
+            debug!(advance = promote_advances_queue, "crossfade complete, promoting next → current");
             stop_current(&mut track);
             if let Some(mut nt) = next.take() {
                 nt.overlap_incoming = None;
                 nt.overlap_outgoing = None;
                 track = Some(nt);
-                queue.advance();
+                if promote_advances_queue {
+                    queue.advance();
+                }
                 sync_queue_meta(&state, &queue);
                 persist_now(&persister, &queue, &state);
             }
+            promote_advances_queue = false;
         }
 
         // Current ended and there's no next to promote — advance the queue

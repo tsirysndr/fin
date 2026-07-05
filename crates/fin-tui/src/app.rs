@@ -974,17 +974,21 @@ async fn emit_scrobble_events(app: &mut App) {
                     }
                 });
             }
-            let item = state.now_playing.as_ref().unwrap();
-            let base_item = queue_item_to_base_item(item);
-            let client_c = client.clone();
-            let session_id_c = session_id.clone();
-            tokio::spawn(async move {
-                if let Err(e) = client_c.report_started(&base_item, &session_id_c).await {
-                    warn!(?e, "scrobble started failed");
-                }
-            });
-            app.scrobble_reported_id = Some(cur.clone());
-            app.scrobble_last_progress = Instant::now();
+            // The match arm's `Some(cur)` guarantees state.now_playing is
+            // Some, but check anyway so this stays a warn-only path even
+            // if the derivation ever changes.
+            if let Some(item) = state.now_playing.as_ref() {
+                let base_item = queue_item_to_base_item(item);
+                let client_c = client.clone();
+                let session_id_c = session_id.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = client_c.report_started(&base_item, &session_id_c).await {
+                        warn!(?e, "scrobble started failed");
+                    }
+                });
+                app.scrobble_reported_id = Some(cur.clone());
+                app.scrobble_last_progress = Instant::now();
+            }
         }
         (Some(prev_id), None) => {
             // Playback ended — fire the closing report.

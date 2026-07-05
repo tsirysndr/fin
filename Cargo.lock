@@ -697,6 +697,7 @@ dependencies = [
  "async-trait",
  "fin-jellyfin",
  "md5",
+ "parking_lot",
  "percent-encoding",
  "rand",
  "reqwest",

@@ -17,6 +17,9 @@ reqwest.workspace = true
 url.workspace = true
 uuid.workspace = true
 percent-encoding.workspace = true
+# parking_lot::Mutex over std — no poisoning means the getters can't panic
+# if a prior lock holder aborted.
+parking_lot.workspace = true
 
 # Subsonic auth: salt + MD5(password + salt) is the standard scheme.
 md5 = "0.7"

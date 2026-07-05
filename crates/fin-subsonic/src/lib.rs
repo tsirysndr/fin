@@ -9,9 +9,10 @@
 //! Auth uses the standard salt + MD5(password + salt) token scheme — no
 //! plain password ever hits the wire once the client is logged in.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
+use parking_lot::Mutex;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use rand::Rng;
 use serde::Deserialize;
@@ -55,8 +56,8 @@ impl SubsonicClient {
     ) -> Result<Self> {
         let mut c = Self::new(base_url)?;
         c.device_id = device_id.into();
-        *c.username.lock().unwrap() = Some(username.into());
-        *c.password.lock().unwrap() = Some(password.into());
+        *c.username.lock() = Some(username.into());
+        *c.password.lock() = Some(password.into());
         Ok(c)
     }
 
@@ -67,18 +68,18 @@ impl SubsonicClient {
         &self.device_id
     }
     pub fn username(&self) -> Option<String> {
-        self.username.lock().unwrap().clone()
+        self.username.lock().clone()
     }
     pub fn password(&self) -> Option<String> {
-        self.password.lock().unwrap().clone()
+        self.password.lock().clone()
     }
 
     /// Verify credentials by hitting `ping.view`. Populates the client's
     /// state and returns an `AuthResult` shaped like Jellyfin's so
     /// downstream code doesn't have to branch on server kind.
     pub async fn login(&mut self, username: &str, password: &str) -> Result<AuthResult> {
-        *self.username.lock().unwrap() = Some(username.to_string());
-        *self.password.lock().unwrap() = Some(password.to_string());
+        *self.username.lock() = Some(username.to_string());
+        *self.password.lock() = Some(password.to_string());
         self.ping().await?;
         Ok(AuthResult {
             access_token: password.to_string(),
@@ -265,13 +266,11 @@ impl SubsonicClient {
         let user = self
             .username
             .lock()
-            .unwrap()
             .clone()
             .ok_or_else(|| anyhow!("subsonic client not logged in"))?;
         let password = self
             .password
             .lock()
-            .unwrap()
             .clone()
             .ok_or_else(|| anyhow!("subsonic client has no password"))?;
         let salt = random_salt();

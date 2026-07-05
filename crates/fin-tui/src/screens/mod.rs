@@ -134,7 +134,11 @@ pub fn item_row_line<'a>(
     now_playing: bool,
     layout: RowLayout,
 ) -> Line<'a> {
-    let icon = if now_playing { "▶" } else { item.kind().icon() };
+    let icon = if now_playing {
+        "▶"
+    } else {
+        item.kind().icon()
+    };
     let (icon_fg, main_style) = if now_playing {
         (
             Palette::HIGHLIGHT,

@@ -252,9 +252,7 @@ impl App {
                                 Some((format!("♪ {} album(s)", v.len()), Instant::now()));
                             *out.lock() = v;
                         }
-                        Err(e) => {
-                            *status.lock() = Some((format!("music: {}", e), Instant::now()))
-                        }
+                        Err(e) => *status.lock() = Some((format!("music: {}", e), Instant::now())),
                     }
                 });
             }
@@ -272,9 +270,7 @@ impl App {
                                 Some((format!("▶ {} item(s)", v.len()), Instant::now()));
                             *out.lock() = v;
                         }
-                        Err(e) => {
-                            *status.lock() = Some((format!("videos: {}", e), Instant::now()))
-                        }
+                        Err(e) => *status.lock() = Some((format!("videos: {}", e), Instant::now())),
                     }
                 });
             }
@@ -374,8 +370,7 @@ impl App {
                 }
                 Err(e) => {
                     if generation.load(Ordering::SeqCst) == gen {
-                        *status.lock() =
-                            Some((format!("⌕ search failed: {}", e), Instant::now()));
+                        *status.lock() = Some((format!("⌕ search failed: {}", e), Instant::now()));
                         tracing::warn!(query=%query, error=?e, "jellyfin search failed");
                     }
                 }
@@ -581,10 +576,8 @@ impl App {
                 .await
             {
                 Ok(v) => {
-                    *status.lock() = Some((
-                        format!("◈ {} — {} track(s)", name, v.len()),
-                        Instant::now(),
-                    ));
+                    *status.lock() =
+                        Some((format!("◈ {} — {} track(s)", name, v.len()), Instant::now()));
                     *out.lock() = v;
                 }
                 Err(e) => *status.lock() = Some((format!("album: {}", e), Instant::now())),
@@ -635,8 +628,7 @@ impl App {
         tokio::spawn(async move {
             match jf.playlist_items(&id).await {
                 Ok(v) => {
-                    *status.lock() =
-                        Some((format!("Loaded {} items", v.len()), Instant::now()));
+                    *status.lock() = Some((format!("Loaded {} items", v.len()), Instant::now()));
                     *out.lock() = v;
                 }
                 Err(e) => *status.lock() = Some((format!("playlist: {}", e), Instant::now())),
@@ -1036,11 +1028,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let renderer = app.renderer.lock().clone();
             let current = renderer.state().shuffle;
             let _ = renderer.set_shuffle(!current).await;
-            app.set_status(if current {
-                "Shuffle off"
-            } else {
-                "Shuffle on"
-            });
+            app.set_status(if current { "Shuffle off" } else { "Shuffle on" });
         }
         // Shift+R cycles repeat (`r` alone refreshes the screen; `l` is next).
         (KeyCode::Char('R'), _) => {

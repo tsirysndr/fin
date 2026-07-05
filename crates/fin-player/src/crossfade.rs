@@ -20,9 +20,15 @@ pub struct FadePair {
 
 impl FadePair {
     /// Full outgoing, no incoming — used when the fade hasn't started.
-    pub const OUTGOING_ONLY: Self = Self { out: 1.0, incoming: 0.0 };
+    pub const OUTGOING_ONLY: Self = Self {
+        out: 1.0,
+        incoming: 0.0,
+    };
     /// No outgoing, full incoming — used after the fade completes.
-    pub const INCOMING_ONLY: Self = Self { out: 0.0, incoming: 1.0 };
+    pub const INCOMING_ONLY: Self = Self {
+        out: 0.0,
+        incoming: 1.0,
+    };
 }
 
 /// Evaluate the fade curve at `progress`. `Mixed` mode returns 1.0/1.0 —

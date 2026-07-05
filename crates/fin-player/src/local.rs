@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use tracing::debug;
 
-use crate::mpv::MpvRenderer;
 use crate::crossfade::CrossfadeSettings;
+use crate::mpv::MpvRenderer;
 use crate::persist::PersistedQueue;
 use crate::queue::{QueueItem, RepeatMode};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
@@ -67,7 +67,13 @@ impl LocalRenderer {
     fn dispatch_target(items: &[QueueItem], start_index: usize) -> Active {
         items
             .get(start_index)
-            .map(|i| if i.is_video { Active::Video } else { Active::Audio })
+            .map(|i| {
+                if i.is_video {
+                    Active::Video
+                } else {
+                    Active::Audio
+                }
+            })
             .unwrap_or(Active::None)
     }
 
@@ -93,7 +99,10 @@ impl Default for LocalRenderer {
 }
 
 fn filter_kind(items: Vec<QueueItem>, want_video: bool) -> Vec<QueueItem> {
-    items.into_iter().filter(|i| i.is_video == want_video).collect()
+    items
+        .into_iter()
+        .filter(|i| i.is_video == want_video)
+        .collect()
 }
 
 #[async_trait]
@@ -136,7 +145,10 @@ impl Renderer for LocalRenderer {
                     self.audio.enqueue(audio_items).await?;
                 }
                 if !video_items.is_empty() {
-                    debug!("dropping {} video item(s) — audio already active", video_items.len());
+                    debug!(
+                        "dropping {} video item(s) — audio already active",
+                        video_items.len()
+                    );
                 }
                 Ok(())
             }
@@ -145,7 +157,10 @@ impl Renderer for LocalRenderer {
                     self.video.enqueue(video_items).await?;
                 }
                 if !audio_items.is_empty() {
-                    debug!("dropping {} audio item(s) — video already active", audio_items.len());
+                    debug!(
+                        "dropping {} audio item(s) — video already active",
+                        audio_items.len()
+                    );
                 }
                 Ok(())
             }

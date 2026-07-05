@@ -460,7 +460,10 @@ mod tests {
         cfg.switch_to("b").unwrap();
         cfg.remove_server("b").unwrap();
         assert_eq!(
-            cfg.servers.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+            cfg.servers
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>(),
             vec!["a", "c"]
         );
         assert_eq!(cfg.current_server.as_deref(), Some("a"));

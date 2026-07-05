@@ -26,9 +26,9 @@ use symphonia::core::probe::Hint;
 use symphonia::core::units::{Time, TimeBase};
 use tracing::{debug, error, warn};
 
-use crate::queue::{PlaybackQueue, QueueItem};
 use crate::crossfade::{fade_at, CrossfadeMode, CrossfadeSettings};
 use crate::persist::{PersistedQueue, Persister};
+use crate::queue::{PlaybackQueue, QueueItem};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 use crate::replaygain::{ReplayGainInfo, ReplayGainSettings};
 
@@ -91,8 +91,7 @@ impl SymphoniaPlayer {
         let worker = thread::Builder::new()
             .name("fin-symphonia".into())
             .spawn(move || {
-                if let Err(e) = run_worker(cmd_rx, worker_state, worker_queue, worker_persister)
-                {
+                if let Err(e) = run_worker(cmd_rx, worker_state, worker_queue, worker_persister) {
                     error!(error = ?e, "symphonia worker exited");
                 }
             })
@@ -377,11 +376,7 @@ fn spawn_streaming_source(url: &str) -> Result<StreamingSource> {
         })
         .context("spawn HTTP fetch thread")?;
 
-    Ok(StreamingSource {
-        buf,
-        ready,
-        pos: 0,
-    })
+    Ok(StreamingSource { buf, ready, pos: 0 })
 }
 
 // ---------------------------------------------------------------------------
@@ -567,7 +562,11 @@ impl Resampler {
             }
             for c in 0..self.dst_ch {
                 let a = if idx < 0 {
-                    if self.have_last { self.last_frame[c] } else { 0.0 }
+                    if self.have_last {
+                        self.last_frame[c]
+                    } else {
+                        0.0
+                    }
                 } else {
                     input[(idx as usize) * self.dst_ch + c]
                 };
@@ -1060,9 +1059,8 @@ fn run_worker(
                             rg_settings,
                         ) {
                             Ok(mut nt) => {
-                                let length_frames = (xf_settings.duration_secs as f64
-                                    * nt.output_sr as f64)
-                                    as u64;
+                                let length_frames =
+                                    (xf_settings.duration_secs as f64 * nt.output_sr as f64) as u64;
                                 let ctx = OverlapContext {
                                     mode: xf_settings.mode,
                                     length_frames,
@@ -1101,9 +1099,7 @@ fn run_worker(
                     .unwrap_or(false);
                 let ct_faded_out = ct
                     .overlap_outgoing
-                    .map(|ctx| {
-                        ct.produced_output_frames >= ctx.start_frame + ctx.length_frames
-                    })
+                    .map(|ctx| ct.produced_output_frames >= ctx.start_frame + ctx.length_frames)
                     .unwrap_or(false);
                 nt_progress_done || ct_faded_out || ct.ended
             }
@@ -1234,8 +1230,7 @@ fn push_samples_with_volume(t: &Track, samples: &[f32]) {
         } else {
             let frames_in_chunk = src.len() / ch;
             // frame index in the OUTPUT-frame timeline this chunk starts at.
-            let start_frame =
-                t.produced_output_frames + (offset / ch) as u64;
+            let start_frame = t.produced_output_frames + (offset / ch) as u64;
             let mut out = Vec::with_capacity(src.len());
             for f in 0..frames_in_chunk {
                 let global = start_frame + f as u64;
@@ -1410,7 +1405,13 @@ fn try_load_track(
         s.position_secs = 0.0;
         s.duration_secs = item.duration_secs.map(|d| d as f64).unwrap_or(0.0);
     }
-    match load_track(host, item.clone(), volume.clone(), paused.clone(), rg_settings) {
+    match load_track(
+        host,
+        item.clone(),
+        volume.clone(),
+        paused.clone(),
+        rg_settings,
+    ) {
         Ok(t) => {
             let mut s = state.lock();
             s.status = PlaybackStatus::Playing;
@@ -1501,11 +1502,8 @@ fn load_track(
     //    channel count from the decoder — the codec_params metadata can lie
     //    for formats like HE-AAC (SBR doubles the effective rate) and some
     //    Ogg streams where the header is optimistic.
-    let (source_sr, source_channels, first_samples) = prime_decoder(
-        &mut format,
-        decoder.as_mut(),
-        track_id,
-    )?;
+    let (source_sr, source_channels, first_samples) =
+        prime_decoder(&mut format, decoder.as_mut(), track_id)?;
 
     // 4. Open cpal at the device's DEFAULT config — that's the rate/channels
     //    the OS actually plays at. Asking cpal to reconfigure the device
@@ -1528,8 +1526,7 @@ fn load_track(
         "opening cpal output"
     );
 
-    let (stream, producer, ring) =
-        build_output_stream(&device, &default_cfg, paused.clone())?;
+    let (stream, producer, ring) = build_output_stream(&device, &default_cfg, paused.clone())?;
 
     let mut resampler = Resampler::new(source_sr, output_sr, source_channels, output_channels);
 
@@ -1593,9 +1590,7 @@ fn prime_decoder(
     track_id: u32,
 ) -> Result<(u32, usize, Vec<f32>)> {
     loop {
-        let packet = format
-            .next_packet()
-            .context("no audio packet in stream")?;
+        let packet = format.next_packet().context("no audio packet in stream")?;
         if packet.track_id() != track_id {
             continue;
         }
@@ -1620,7 +1615,12 @@ fn prime_decoder(
 }
 
 fn ext_from_content_type(ct: &str) -> Option<&'static str> {
-    let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let ct = ct
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     match ct.as_str() {
         "audio/mpeg" | "audio/mp3" => Some("mp3"),
         "audio/flac" | "audio/x-flac" => Some("flac"),

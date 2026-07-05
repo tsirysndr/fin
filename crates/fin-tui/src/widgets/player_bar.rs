@@ -145,10 +145,7 @@ impl<'a> Widget for PlayerBar<'a> {
                 fin_player::CrossfadeMode::Off => unreachable!(),
             };
             Span::styled(
-                format!(
-                    "{} {:.0}s ",
-                    glyph, self.state.crossfade.duration_secs
-                ),
+                format!("{} {:.0}s ", glyph, self.state.crossfade.duration_secs),
                 Style::default()
                     .fg(Palette::HIGHLIGHT)
                     .add_modifier(Modifier::BOLD),

@@ -203,6 +203,12 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
             {
                 tracing::warn!(?e, "eq apply failed");
             }
+            if let Err(e) = r
+                .set_tone(cfg.bass, cfg.treble, cfg.bass_cutoff, cfg.treble_cutoff)
+                .await
+            {
+                tracing::warn!(?e, "tone apply failed");
+            }
             if let Some(snap) = saved {
                 if !snap.items.is_empty() {
                     let items_n = snap.items.len();

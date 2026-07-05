@@ -44,6 +44,10 @@ pub struct PlaybackState {
     pub eq_enabled: bool,
     #[serde(default)]
     pub eq_band_count: usize,
+    #[serde(default)]
+    pub bass_db: i32,
+    #[serde(default)]
+    pub treble_db: i32,
 }
 
 impl Default for PlaybackState {
@@ -62,6 +66,8 @@ impl Default for PlaybackState {
             crossfade: CrossfadeSettings::default(),
             eq_enabled: false,
             eq_band_count: 0,
+            bass_db: 0,
+            treble_db: 0,
         }
     }
 }
@@ -154,6 +160,19 @@ pub trait Renderer: Send + Sync {
     /// SymphoniaPlayer implements this — non-local receivers each apply
     /// their own EQ (or none).
     async fn set_eq(&self, _enabled: bool, _bands: Vec<EqBand>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Bass/treble shelf gains in whole dB, plus optional cutoffs in Hz
+    /// (0 = Rockbox defaults 200 Hz bass, 3500 Hz treble). Only the local
+    /// SymphoniaPlayer applies these; non-local receivers no-op.
+    async fn set_tone(
+        &self,
+        _bass_db: i32,
+        _treble_db: i32,
+        _bass_cutoff_hz: i32,
+        _treble_cutoff_hz: i32,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 

@@ -40,6 +40,18 @@ pub struct Config {
     /// flat preset (32 Hz…16 kHz, Q 7.0, 0 dB) via `#[serde(default = …)]`.
     #[serde(default = "default_eq_band_settings")]
     pub eq_band_settings: Vec<EqBand>,
+    /// Bass shelf gain in whole dB (matches Rockbox `bass`). Range −24…+24.
+    #[serde(default)]
+    pub bass: i32,
+    /// Treble shelf gain in whole dB (matches Rockbox `treble`). Range −24…+24.
+    #[serde(default)]
+    pub treble: i32,
+    /// Bass shelf cutoff in Hz. `0` = Rockbox default 200 Hz.
+    #[serde(default)]
+    pub bass_cutoff: i32,
+    /// Treble shelf cutoff in Hz. `0` = Rockbox default 3500 Hz.
+    #[serde(default)]
+    pub treble_cutoff: i32,
 }
 
 /// The ISO-octave 10-band flat preset used when a fresh config has no

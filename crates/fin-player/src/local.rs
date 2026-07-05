@@ -309,6 +309,18 @@ impl Renderer for LocalRenderer {
         self.audio.set_eq(enabled, bands).await
     }
 
+    async fn set_tone(
+        &self,
+        bass_db: i32,
+        treble_db: i32,
+        bass_cutoff_hz: i32,
+        treble_cutoff_hz: i32,
+    ) -> Result<()> {
+        self.audio
+            .set_tone(bass_db, treble_db, bass_cutoff_hz, treble_cutoff_hz)
+            .await
+    }
+
     fn state(&self) -> PlaybackState {
         match self.get_active() {
             Active::Audio => self.audio.state(),

@@ -440,6 +440,31 @@ impl App {
         }
     }
 
+    /// Bump the bass shelf gain by `delta_db`, clamp to ±24 dB, persist,
+    /// and push the new values to the DSP.
+    async fn nudge_tone_bass(&mut self, delta_db: i32) {
+        self.nudge_tone(delta_db, 0).await;
+    }
+
+    /// Bump the treble shelf gain by `delta_db`, clamp to ±24 dB, persist,
+    /// and push the new values to the DSP.
+    async fn nudge_tone_treble(&mut self, delta_db: i32) {
+        self.nudge_tone(0, delta_db).await;
+    }
+
+    async fn nudge_tone(&mut self, d_bass: i32, d_treble: i32) {
+        let (bass, treble, bass_cut, treble_cut) = {
+            let mut cfg = self.config.lock();
+            cfg.bass = (cfg.bass + d_bass).clamp(-24, 24);
+            cfg.treble = (cfg.treble + d_treble).clamp(-24, 24);
+            let _ = cfg.save();
+            (cfg.bass, cfg.treble, cfg.bass_cutoff, cfg.treble_cutoff)
+        };
+        let renderer = self.renderer.lock().clone();
+        let _ = renderer.set_tone(bass, treble, bass_cut, treble_cut).await;
+        self.set_status(format!("Tone: bass {:+} dB   treble {:+} dB", bass, treble));
+    }
+
     /// Adjust the selected EQ band's gain by `delta_tenths` (Rockbox
     /// tenths-of-dB units). Persists to config and reapplies to the DSP.
     async fn nudge_eq_band_gain(&mut self, delta_tenths: i32) {
@@ -1133,6 +1158,21 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.set_status(format!("Crossfade duration: {:.1}s", next));
             }
         }
+        // Bass / treble shelves — Rockbox tone controls. `b/B` for bass,
+        // `y/Y` (adjacent to `t`, which is taken for server cycle) for
+        // treble. Each press moves the shelf gain by 1 dB, clamped to ±24.
+        (KeyCode::Char('b'), _) => {
+            app.nudge_tone_bass(-1).await;
+        }
+        (KeyCode::Char('B'), _) => {
+            app.nudge_tone_bass(1).await;
+        }
+        (KeyCode::Char('y'), _) => {
+            app.nudge_tone_treble(-1).await;
+        }
+        (KeyCode::Char('Y'), _) => {
+            app.nudge_tone_treble(1).await;
+        }
         // Equalizer: `E` toggles the Rockbox EQ pipeline.
         (KeyCode::Char('E'), _) => {
             let (new_enabled, bands) = {
@@ -1558,9 +1598,12 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(9),
-            Constraint::Length(11),
-            Constraint::Min(4),
+            Constraint::Length(10),
+            // EQ card — bigger so the vertical sliders have real
+            // resolution; server list drops to a floor of 3 rows if
+            // vertical space is tight.
+            Constraint::Length(18),
+            Constraint::Min(3),
         ])
         .split(area);
 
@@ -1606,6 +1649,22 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
                     "   duration {:.1} s   (f: cycle mode, Shift+F: cycle duration)",
                     cfg_snapshot.crossfade.duration_secs
                 ),
+                muted_style(),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Tone          ", title_style()),
+            Span::styled(
+                format!("bass {:+} dB", cfg_snapshot.bass),
+                accent_style(),
+            ),
+            Span::styled("   ", muted_style()),
+            Span::styled(
+                format!("treble {:+} dB", cfg_snapshot.treble),
+                accent_style(),
+            ),
+            Span::styled(
+                "   (b/B: bass, y/Y: treble; 1 dB steps)",
                 muted_style(),
             ),
         ]),
@@ -1774,7 +1833,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  f/F: crossfade/dur  E: eq  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
+    let help = " tab: screen  ↑↓/jk: nav  enter: play/drill  x: play all  a: queue  n: next  z: shuffle  R: repeat  g: replaygain  f/F: crossfade/dur  E: eq  b/B: bass  y/Y: treble  space: pause  s: stop  d: rm/C: clear (queue)  </>: skip  +/-: vol  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

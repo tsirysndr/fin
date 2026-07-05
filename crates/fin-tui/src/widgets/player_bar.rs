@@ -163,12 +163,26 @@ impl<'a> Widget for PlayerBar<'a> {
         } else {
             Span::raw("")
         };
+        let tone_span = if self.state.bass_db != 0 || self.state.treble_db != 0 {
+            Span::styled(
+                format!(
+                    "B{:+}/T{:+} ",
+                    self.state.bass_db, self.state.treble_db
+                ),
+                Style::default()
+                    .fg(Palette::HIGHLIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw("")
+        };
         let right_line = Line::from(vec![
             shuffle_span,
             repeat_span,
             rg_span,
             xf_span,
             eq_span,
+            tone_span,
             Span::styled(
                 format!("♪ {}%   ", (self.state.volume * 100.0) as i32),
                 Style::default().fg(Palette::HIGHLIGHT),

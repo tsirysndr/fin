@@ -37,6 +37,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
   - [ReplayGain](#replaygain)
   - [Crossfade](#crossfade)
   - [Equalizer](#equalizer)
+  - [Bass & treble](#bass--treble)
 - [Queue persistence](#queue-persistence)
 - [Remote-renderer queue](#remote-renderer-queue)
 - [Streams & transcoding](#streams--transcoding)
@@ -269,6 +270,10 @@ the TUI (see [Playback modes & effects](#playback-modes--effects)):
 | `crossfade.duration_secs`         | `5.0`          | overlap window in seconds                                |
 | `eq_enabled`                      | `false`        | toggle the Rockbox 10-band EQ pipeline                   |
 | `[[eq_band_settings]]`            | ISO octave     | 10 bands (see [Equalizer](#equalizer)); Rockbox-compatible |
+| `bass`                            | `0`            | bass shelf gain in whole dB (−24…+24)                    |
+| `treble`                          | `0`            | treble shelf gain in whole dB (−24…+24)                  |
+| `bass_cutoff`                     | `0`            | bass shelf cutoff in Hz (`0` = Rockbox default 200)      |
+| `treble_cutoff`                   | `0`            | treble shelf cutoff in Hz (`0` = Rockbox default 3500)   |
 
 Find the on-disk config with `fin config --path`; print it with
 `fin config --show`.
@@ -340,6 +345,8 @@ Tab order — the default screen is **Music**:
 | `Shift+E`                    | toggle 10-band Rockbox EQ           |
 | `[` / `]`                    | (Settings) select previous / next EQ band |
 | `Shift+↑` / `Shift+↓`        | (Settings) nudge the selected EQ band's gain by ±1 dB |
+| `b` / `Shift+B`              | bass shelf −1 dB / +1 dB            |
+| `y` / `Shift+Y`              | treble shelf −1 dB / +1 dB          |
 | `Space` or `p`               | pause / resume                      |
 | `s`                          | stop                                |
 | `<` / `>` or `h` / `l`       | previous / next track               |
@@ -423,15 +430,28 @@ in unchanged.
 which makes the resulting `fin` binary GPL. The rest of `fin` remains MPL-2.0
 in source form.
 
-Two behavioral notes:
+Behavioral notes:
 
-- **EQ only applies to the currently-playing track**, not to the crossfade
-  incoming track. The Rockbox DSP is a process-wide singleton (`CODEC_IDX_AUDIO`),
-  so it can only process one stream at a time. During a crossfade the outgoing
-  track is EQ'd; the incoming track becomes EQ'd only after it's promoted to
-  current.
 - **Only local playback runs through EQ.** Chromecast and UPnP receivers each
   do their own DSP; the toggle is a no-op there.
+- During a crossfade the outgoing *and* incoming tracks both route through
+  the same Rockbox DSP config. The biquad delay lines get briefly stirred
+  when the two tracks alternate through the pipeline — the audible transient
+  is well under a millisecond at 48 kHz.
+
+### Bass & treble
+
+The Rockbox tone-control stage runs in the same DSP pipeline as the EQ —
+shelving filters at fixed cutoffs (default 200 Hz bass, 3500 Hz treble).
+Adjust with `b` / `Shift+B` for bass and `y` / `Shift+Y` for treble; every
+press is a 1 dB step in the ±24 dB range and is persisted to `config.toml`
+immediately. The Settings screen shows the current values, and the player
+bar shows a compact `B+3/T-2` badge whenever either is non-zero.
+
+Custom shelf cutoffs can be set in `config.toml` via `bass_cutoff` /
+`treble_cutoff` (Hz); `0` means the Rockbox defaults. The keys and this
+stage go through the same singleton pipeline as EQ, so the licensing note
+above applies.
 
 ## Queue persistence
 

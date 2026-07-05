@@ -75,6 +75,12 @@ enum PlayerCommand {
         enabled: bool,
         bands: Vec<EqBand>,
     },
+    SetTone {
+        bass_db: i32,
+        treble_db: i32,
+        bass_cutoff_hz: i32,
+        treble_cutoff_hz: i32,
+    },
     Quit,
 }
 
@@ -201,6 +207,21 @@ impl Renderer for SymphoniaPlayer {
 
     async fn set_eq(&self, enabled: bool, bands: Vec<EqBand>) -> Result<()> {
         self.send(PlayerCommand::SetEq { enabled, bands })
+    }
+
+    async fn set_tone(
+        &self,
+        bass_db: i32,
+        treble_db: i32,
+        bass_cutoff_hz: i32,
+        treble_cutoff_hz: i32,
+    ) -> Result<()> {
+        self.send(PlayerCommand::SetTone {
+            bass_db,
+            treble_db,
+            bass_cutoff_hz,
+            treble_cutoff_hz,
+        })
     }
 
     fn state(&self) -> PlaybackState {
@@ -629,6 +650,13 @@ fn run_worker(
     let mut dsp: Option<Dsp> = None;
     let mut eq_enabled = false;
     let mut eq_bands: Vec<EqBand> = Vec::new();
+    // Tone (bass/treble) shelf gains in whole dB, plus optional cutoff
+    // overrides in Hz (0 = Rockbox defaults). Applied to the Dsp singleton
+    // like EQ — set once on init, updated live via SetTone.
+    let mut tone_bass_db: i32 = 0;
+    let mut tone_treble_db: i32 = 0;
+    let mut tone_bass_cutoff_hz: i32 = 0;
+    let mut tone_treble_cutoff_hz: i32 = 0;
     // The "incoming" track being preloaded during a crossfade overlap.
     // `Some` only during an active overlap. When the fade-in completes,
     // this promotes to `track` and the previous `track` is dropped.
@@ -986,6 +1014,29 @@ fn run_worker(
                         s.eq_band_count = eq_bands.len().min(EQ_NUM_BANDS);
                     }
                 }
+                PlayerCommand::SetTone {
+                    bass_db,
+                    treble_db,
+                    bass_cutoff_hz,
+                    treble_cutoff_hz,
+                } => {
+                    tone_bass_db = bass_db;
+                    tone_treble_db = treble_db;
+                    tone_bass_cutoff_hz = bass_cutoff_hz;
+                    tone_treble_cutoff_hz = treble_cutoff_hz;
+                    if let Some(ref mut d) = dsp {
+                        apply_tone_to_dsp(
+                            d,
+                            tone_bass_db,
+                            tone_treble_db,
+                            tone_bass_cutoff_hz,
+                            tone_treble_cutoff_hz,
+                        );
+                    }
+                    let mut s = state.lock();
+                    s.bass_db = bass_db;
+                    s.treble_db = treble_db;
+                }
                 PlayerCommand::SetCrossfade(settings) => {
                     xf_settings = settings;
                     // If the mode was turned OFF mid-overlap, kill the
@@ -1061,15 +1112,26 @@ fn run_worker(
                 // resample, just the EQ / tone stack.
                 d.set_input_frequency(t.output_sr);
                 apply_eq_to_dsp(&mut d, eq_enabled, &eq_bands);
+                apply_tone_to_dsp(
+                    &mut d,
+                    tone_bass_db,
+                    tone_treble_db,
+                    tone_bass_cutoff_hz,
+                    tone_treble_cutoff_hz,
+                );
                 dsp = Some(d);
             }
 
             let free = t.ring_free_slots();
             if free >= 8192 && !t.ended {
-                // EQ only routes for the CURRENT track — the singleton
-                // constraint means we can't run two tracks through Dsp
-                // at once. `next` (during crossfade) bypasses.
-                let dsp_arg = if eq_enabled { dsp.as_mut() } else { None };
+                // EQ / tone only route for the CURRENT track — the DSP is
+                // a process-wide singleton (`CODEC_IDX_AUDIO`), so we
+                // can't run two tracks through it at once. `next` (during
+                // crossfade) bypasses. We also skip the DSP entirely when
+                // no stage is doing anything, to avoid the f32↔i16 hops.
+                let dsp_active =
+                    eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
+                let dsp_arg = if dsp_active { dsp.as_mut() } else { None };
                 match decode_one_packet(t, dsp_arg) {
                     DecodeStep::Pushed => update_position(&state, t),
                     DecodeStep::EndOfStream => {
@@ -1085,11 +1147,18 @@ fn run_worker(
         }
 
         // Decode next in parallel — it has its own ring buffer, so no
-        // backpressure conflict with current.
+        // backpressure conflict with current. During crossfade we want the
+        // same EQ / tone curve on the incoming track too, so we route it
+        // through the same Dsp singleton. Rockbox's biquad delay-line
+        // state gets briefly stirred at the switch (~sub-1 ms transient
+        // at 48 kHz), inaudible in practice for a 5–12 s overlap.
         if let Some(ref mut nt) = next {
             let free = nt.ring_free_slots();
             if free >= 8192 && !nt.ended {
-                match decode_one_packet(nt, None) {
+                let dsp_active =
+                    eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
+                let dsp_arg = if dsp_active { dsp.as_mut() } else { None };
+                match decode_one_packet(nt, dsp_arg) {
                     DecodeStep::Pushed => {}
                     DecodeStep::EndOfStream => nt.ended = true,
                     DecodeStep::Error(e) => {
@@ -1304,6 +1373,22 @@ fn apply_dsp(dsp: &mut Dsp, samples: &[f32]) -> Vec<f32> {
     dsp.process(&input, &mut out_i16);
     // i16 → f32.
     out_i16.iter().map(|&s| s as f32 / 32768.0).collect()
+}
+
+/// Apply bass/treble shelf gains + cutoffs to the Dsp singleton. Cutoffs
+/// of `0` fall back to Rockbox defaults (200 Hz bass, 3500 Hz treble).
+/// The Dsp wrapper multiplies dB values by 10 internally.
+fn apply_tone_to_dsp(
+    dsp: &mut Dsp,
+    bass_db: i32,
+    treble_db: i32,
+    bass_cutoff_hz: i32,
+    treble_cutoff_hz: i32,
+) {
+    // Cutoffs must be set BEFORE gains — Dsp::set_tone runs the prescale
+    // which recomputes filter coefficients from whatever cutoff is active.
+    dsp.set_tone_cutoffs(bass_cutoff_hz, treble_cutoff_hz);
+    dsp.set_tone(bass_db, treble_db);
 }
 
 /// Apply an on/off toggle plus the current bands to the Dsp singleton.

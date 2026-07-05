@@ -29,6 +29,27 @@ use tracing::{debug, error, warn};
 use fin_config::EqBand;
 use rockbox_dsp::{eq_band_setting, Dsp, EQ_NUM_BANDS};
 
+use crate::voice_dsp::VoiceDsp;
+
+/// Uniform "process interleaved stereo i16 → interleaved stereo i16"
+/// interface so `decode_one_packet` can accept either the process-wide
+/// audio DSP or the crossfade-only voice DSP without duplicating logic.
+trait DspProcess {
+    fn process_stereo(&mut self, input: &[i16], out: &mut Vec<i16>);
+}
+
+impl DspProcess for Dsp {
+    fn process_stereo(&mut self, input: &[i16], out: &mut Vec<i16>) {
+        self.process(input, out);
+    }
+}
+
+impl DspProcess for VoiceDsp {
+    fn process_stereo(&mut self, input: &[i16], out: &mut Vec<i16>) {
+        self.process(input, out);
+    }
+}
+
 use crate::crossfade::{fade_at, CrossfadeMode, CrossfadeSettings};
 use crate::persist::{PersistedQueue, Persister};
 use crate::queue::{PlaybackQueue, QueueItem};
@@ -648,6 +669,12 @@ fn run_worker(
     // never own two at once — the crossfade `next` track bypasses it and
     // uses the plain resampler.
     let mut dsp: Option<Dsp> = None;
+    // Second DSP instance bound to Rockbox's `CODEC_IDX_VOICE`. Rockbox
+    // shares EQ / tone coefficients across configs but keeps biquad delay
+    // lines per-config — so running the crossfade next track through here
+    // gives it the same filter curve as `dsp` without churning `dsp`'s
+    // delay lines (the source of the "small noises" during overlap).
+    let mut voice_dsp: Option<VoiceDsp> = None;
     let mut eq_enabled = false;
     let mut eq_bands: Vec<EqBand> = Vec::new();
     // Tone (bass/treble) shelf gains in whole dB, plus optional cutoff
@@ -738,6 +765,9 @@ fn run_worker(
                                     // current_index at the incoming track,
                                     // so promotion must NOT advance it.
                                     promote_advances_queue = false;
+                                    if let Some(vd) = voice_dsp.as_mut() {
+                                        vd.flush();
+                                    }
                                     next = Some(nt);
                                 }
                                 Err(e) => {
@@ -1120,18 +1150,30 @@ fn run_worker(
                     tone_treble_cutoff_hz,
                 );
                 dsp = Some(d);
+                // Spin up the second config now too — cheap, and it means
+                // the crossfade preload path never blocks on init.
+                if voice_dsp.is_none() {
+                    let mut vd = VoiceDsp::new(t.output_sr);
+                    vd.set_input_frequency(t.output_sr);
+                    voice_dsp = Some(vd);
+                }
             }
 
             let free = t.ring_free_slots();
             if free >= 8192 && !t.ended {
-                // EQ / tone only route for the CURRENT track — the DSP is
-                // a process-wide singleton (`CODEC_IDX_AUDIO`), so we
-                // can't run two tracks through it at once. `next` (during
-                // crossfade) bypasses. We also skip the DSP entirely when
-                // no stage is doing anything, to avoid the f32↔i16 hops.
+                // Current track always uses the AUDIO Rockbox config; the
+                // next track (during crossfade) uses the VOICE config
+                // below. Coefficients are global, so the EQ curve matches;
+                // only the biquad delay lines differ. Skip both configs
+                // when no stage is doing anything to avoid the f32↔i16
+                // conversion hops.
                 let dsp_active =
                     eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
-                let dsp_arg = if dsp_active { dsp.as_mut() } else { None };
+                let dsp_arg: Option<&mut dyn DspProcess> = if dsp_active {
+                    dsp.as_mut().map(|d| d as &mut dyn DspProcess)
+                } else {
+                    None
+                };
                 match decode_one_packet(t, dsp_arg) {
                     DecodeStep::Pushed => update_position(&state, t),
                     DecodeStep::EndOfStream => {
@@ -1147,17 +1189,22 @@ fn run_worker(
         }
 
         // Decode next in parallel — it has its own ring buffer, so no
-        // backpressure conflict with current. During crossfade we want the
-        // same EQ / tone curve on the incoming track too, so we route it
-        // through the same Dsp singleton. Rockbox's biquad delay-line
-        // state gets briefly stirred at the switch (~sub-1 ms transient
-        // at 48 kHz), inaudible in practice for a 5–12 s overlap.
+        // backpressure conflict with current. During crossfade the next
+        // track routes through the dedicated VOICE DSP config so the
+        // AUDIO config's biquad delay lines are undisturbed — that's what
+        // caused the "small noises" during overlap in the previous
+        // shared-DSP version. Coefficients are still global, so the EQ
+        // curve is identical on both sides.
         if let Some(ref mut nt) = next {
             let free = nt.ring_free_slots();
             if free >= 8192 && !nt.ended {
                 let dsp_active =
                     eq_enabled || tone_bass_db != 0 || tone_treble_db != 0;
-                let dsp_arg = if dsp_active { dsp.as_mut() } else { None };
+                let dsp_arg: Option<&mut dyn DspProcess> = if dsp_active {
+                    voice_dsp.as_mut().map(|d| d as &mut dyn DspProcess)
+                } else {
+                    None
+                };
                 match decode_one_packet(nt, dsp_arg) {
                     DecodeStep::Pushed => {}
                     DecodeStep::EndOfStream => nt.ended = true,
@@ -1215,6 +1262,12 @@ fn run_worker(
                                 // NOT yet the queue's current, so promotion
                                 // must advance.
                                 promote_advances_queue = true;
+                                // Fresh biquad state for the incoming track
+                                // — no delay-line pollution from a prior
+                                // preload that never got promoted.
+                                if let Some(vd) = voice_dsp.as_mut() {
+                                    vd.flush();
+                                }
                                 next = Some(nt);
                             }
                             Err(e) => {
@@ -1254,6 +1307,17 @@ fn run_worker(
                 }
                 sync_queue_meta(&state, &queue);
                 persist_now(&persister, &queue, &state);
+                // The AUDIO DSP was tuned to the OUTGOING track's samples.
+                // The newly-promoted track will now route through it, so
+                // reset both configs' delay lines to zero — cheaper and
+                // cleaner than letting stale state resonate through the
+                // first packet or two.
+                if let Some(d) = dsp.as_mut() {
+                    d.flush();
+                }
+                if let Some(vd) = voice_dsp.as_mut() {
+                    vd.flush();
+                }
             }
             promote_advances_queue = false;
         }
@@ -1310,7 +1374,7 @@ enum DecodeStep {
     Error(String),
 }
 
-fn decode_one_packet(t: &mut Track, dsp: Option<&mut Dsp>) -> DecodeStep {
+fn decode_one_packet(t: &mut Track, dsp: Option<&mut dyn DspProcess>) -> DecodeStep {
     let packet = match t.format.next_packet() {
         Ok(p) => p,
         Err(symphonia::core::errors::Error::IoError(e))
@@ -1359,10 +1423,10 @@ fn decode_one_packet(t: &mut Track, dsp: Option<&mut Dsp>) -> DecodeStep {
     DecodeStep::Pushed
 }
 
-/// Route interleaved-stereo f32 samples through the Rockbox DSP pipeline
+/// Route interleaved-stereo f32 samples through a Rockbox DSP pipeline
 /// with input rate == output rate (no internal resample; my Resampler
 /// already ran). Loudness scales aside, this is just the EQ + tone stack.
-fn apply_dsp(dsp: &mut Dsp, samples: &[f32]) -> Vec<f32> {
+fn apply_dsp(dsp: &mut dyn DspProcess, samples: &[f32]) -> Vec<f32> {
     // f32 → i16, saturating.
     let mut input = Vec::with_capacity(samples.len());
     for &s in samples {
@@ -1370,7 +1434,7 @@ fn apply_dsp(dsp: &mut Dsp, samples: &[f32]) -> Vec<f32> {
         input.push(v);
     }
     let mut out_i16: Vec<i16> = Vec::with_capacity(input.len());
-    dsp.process(&input, &mut out_i16);
+    dsp.process_stereo(&input, &mut out_i16);
     // i16 → f32.
     out_i16.iter().map(|&s| s as f32 / 32768.0).collect()
 }

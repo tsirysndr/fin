@@ -9,6 +9,7 @@ pub mod renderer;
 pub mod replaygain;
 pub mod symphonia_player;
 pub mod upnp;
+pub mod voice_dsp;
 
 pub use cast::ChromecastRenderer;
 pub use crossfade::{CrossfadeMode, CrossfadeSettings};

@@ -217,3 +217,148 @@ fn pad_to(s: &str, cols: usize) -> String {
         format!("{}{}", s, " ".repeat(cols - w))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ------------------------------------------------------------------
+    // Screen tab navigation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn screen_all_matches_declared_tab_order() {
+        // The header row in the TUI walks Screen::ALL in this order; if it
+        // drifts, the `1`…`7` shortcuts silently jump to the wrong tab.
+        assert_eq!(
+            Screen::ALL,
+            &[
+                Screen::Music,
+                Screen::Videos,
+                Screen::Playlists,
+                Screen::Queue,
+                Screen::Search,
+                Screen::Devices,
+                Screen::Settings,
+            ]
+        );
+    }
+
+    #[test]
+    fn screen_next_wraps_around_at_end() {
+        assert_eq!(Screen::Music.next(), Screen::Videos);
+        assert_eq!(Screen::Videos.next(), Screen::Playlists);
+        // Last tab wraps back to the first.
+        assert_eq!(Screen::Settings.next(), Screen::Music);
+    }
+
+    #[test]
+    fn screen_prev_wraps_around_at_start() {
+        assert_eq!(Screen::Music.prev(), Screen::Settings);
+        assert_eq!(Screen::Videos.prev(), Screen::Music);
+        assert_eq!(Screen::Settings.prev(), Screen::Devices);
+    }
+
+    #[test]
+    fn screen_next_prev_are_inverses() {
+        for &s in Screen::ALL {
+            assert_eq!(s.next().prev(), s);
+            assert_eq!(s.prev().next(), s);
+        }
+    }
+
+    #[test]
+    fn screen_icon_and_label_lookup_by_variant() {
+        // Guards against a rename that would blank out the header UI.
+        assert_eq!(Screen::Music.icon(), "♪");
+        assert_eq!(Screen::Music.label(), "Music");
+        assert_eq!(Screen::Queue.icon(), "≡");
+        assert_eq!(Screen::Settings.label(), "Settings");
+    }
+
+    // ------------------------------------------------------------------
+    // Duration formatting
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn fmt_dur_zero() {
+        assert_eq!(fmt_dur(0), "0:00");
+    }
+
+    #[test]
+    fn fmt_dur_under_an_hour() {
+        assert_eq!(fmt_dur(59), "0:59");
+        assert_eq!(fmt_dur(60), "1:00");
+        assert_eq!(fmt_dur(3599), "59:59");
+    }
+
+    #[test]
+    fn fmt_dur_hour_and_over() {
+        assert_eq!(fmt_dur(3600), "1:00:00");
+        assert_eq!(fmt_dur(3661), "1:01:01");
+        assert_eq!(fmt_dur(36_000), "10:00:00");
+    }
+
+    // ------------------------------------------------------------------
+    // RowLayout column widths
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn row_layout_sums_to_total_width() {
+        for total in [40u16, 80, 120, 200] {
+            let l = RowLayout::compute(total);
+            let sum = l.icon_col + l.title_col + l.gap1 + l.sub_col + l.gap2 + l.time_col;
+            assert_eq!(sum, total as usize);
+        }
+    }
+
+    #[test]
+    fn row_layout_hides_subtitle_column_on_narrow_terminals() {
+        // 30 chars is our documented cutoff: sub_col goes to 0 so the title
+        // column takes the full middle.
+        let l = RowLayout::compute(40);
+        assert_eq!(l.sub_col, 0);
+        // But nothing else disappears — icon, gap1/2, time still present.
+        assert!(l.title_col > 0);
+        assert_eq!(l.icon_col, RowLayout::ICON);
+        assert_eq!(l.time_col, RowLayout::TIME_MAX);
+    }
+
+    #[test]
+    fn row_layout_gives_title_roughly_55_percent_of_middle() {
+        // Loose bound — implementation uses integer math, so ±1 is fine.
+        let l = RowLayout::compute(120);
+        let mid = l.title_col + l.sub_col;
+        assert!(mid > 0);
+        let ratio = l.title_col as f32 / mid as f32;
+        assert!(
+            (0.5..=0.6).contains(&ratio),
+            "title ratio {} not in [0.50, 0.60]",
+            ratio
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Truncation helper
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn truncate_leaves_short_strings_alone() {
+        assert_eq!(truncate("abc", 10), "abc");
+        assert_eq!(truncate("", 5), "");
+    }
+
+    #[test]
+    fn truncate_adds_ellipsis_and_stays_within_budget() {
+        // "abcdefghij" → 10 cols. Truncated to 5 must land at 5 cols total,
+        // ending with the ellipsis character.
+        let out = truncate("abcdefghij", 5);
+        assert!(out.ends_with('…'));
+        assert!(out.width() <= 5);
+    }
+
+    #[test]
+    fn truncate_single_column_gives_bare_ellipsis() {
+        assert_eq!(truncate("longstring", 1), "…");
+    }
+}

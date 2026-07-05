@@ -593,4 +593,129 @@ mod tests {
         assert!(cfg.find_server("prod").is_some());
         assert!(cfg.find_server("nope").is_none());
     }
+
+    // ------------------------------------------------------------------
+    // Playback-mode enum helpers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn replaygain_mode_labels_and_cycle() {
+        assert_eq!(ReplayGainMode::Off.label(), "off");
+        assert_eq!(ReplayGainMode::Track.label(), "track");
+        assert_eq!(ReplayGainMode::Album.label(), "album");
+        assert_eq!(ReplayGainMode::Off.next(), ReplayGainMode::Track);
+        assert_eq!(ReplayGainMode::Track.next(), ReplayGainMode::Album);
+        assert_eq!(ReplayGainMode::Album.next(), ReplayGainMode::Off);
+        assert!(!ReplayGainMode::Off.is_active());
+        assert!(ReplayGainMode::Track.is_active());
+        assert!(ReplayGainMode::Album.is_active());
+    }
+
+    #[test]
+    fn crossfade_mode_labels_and_cycle() {
+        assert_eq!(CrossfadeMode::Off.label(), "off");
+        assert_eq!(CrossfadeMode::Crossfade.label(), "crossfade");
+        assert_eq!(CrossfadeMode::Mixed.label(), "mixed");
+        assert_eq!(CrossfadeMode::Off.next(), CrossfadeMode::Crossfade);
+        assert_eq!(CrossfadeMode::Crossfade.next(), CrossfadeMode::Mixed);
+        assert_eq!(CrossfadeMode::Mixed.next(), CrossfadeMode::Off);
+        assert!(!CrossfadeMode::Off.is_active());
+        assert!(CrossfadeMode::Crossfade.is_active());
+        assert!(CrossfadeMode::Mixed.is_active());
+    }
+
+    #[test]
+    fn crossfade_default_duration_is_five_seconds() {
+        // The public contract: fresh installs get a 5 s overlap when the
+        // mode is turned on, matching the README + Settings hint.
+        let s = CrossfadeSettings::default();
+        assert!((s.duration_secs - 5.0).abs() < 1e-6);
+        assert_eq!(s.mode, CrossfadeMode::Off);
+    }
+
+    #[test]
+    fn replaygain_default_has_clip_guard_on() {
+        // Clip prevention on by default — safer for typical listeners.
+        let s = ReplayGainSettings::default();
+        assert!(s.prevent_clip);
+        assert!((s.preamp_db - 0.0).abs() < 1e-6);
+        assert_eq!(s.mode, ReplayGainMode::Off);
+    }
+
+    // ------------------------------------------------------------------
+    // Default EQ preset
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn default_eq_band_settings_has_ten_iso_octave_bands() {
+        let bands = default_eq_band_settings();
+        assert_eq!(bands.len(), 10);
+        // First = 32 Hz low shelf, last = 16 kHz high shelf.
+        assert_eq!(bands[0].cutoff, 32);
+        assert_eq!(bands[9].cutoff, 16_000);
+        // Every band flat + Q 7.0.
+        for b in &bands {
+            assert_eq!(b.q, 70);
+            assert_eq!(b.gain, 0);
+        }
+        // Strictly ascending cutoffs — a monotonic sweep across the audible
+        // range so users get a meaningful sliders layout out of the box.
+        for w in bands.windows(2) {
+            assert!(w[0].cutoff < w[1].cutoff);
+        }
+    }
+
+    #[test]
+    fn ensure_eq_bands_fills_empty_with_defaults() {
+        let mut cfg = Config::default();
+        assert!(cfg.eq_band_settings.is_empty());
+        cfg.ensure_eq_bands();
+        assert_eq!(cfg.eq_band_settings.len(), 10);
+        assert_eq!(cfg.eq_band_settings[0].cutoff, 32);
+    }
+
+    #[test]
+    fn ensure_eq_bands_pads_short_lists_to_ten() {
+        let mut cfg = Config::default();
+        // Simulate a truncated preset with three custom bands.
+        cfg.eq_band_settings = vec![
+            EqBand {
+                cutoff: 100,
+                q: 70,
+                gain: 30,
+            },
+            EqBand {
+                cutoff: 300,
+                q: 70,
+                gain: 15,
+            },
+            EqBand {
+                cutoff: 900,
+                q: 70,
+                gain: -20,
+            },
+        ];
+        cfg.ensure_eq_bands();
+        assert_eq!(cfg.eq_band_settings.len(), 10);
+        // First three preserved verbatim.
+        assert_eq!(cfg.eq_band_settings[0].cutoff, 100);
+        assert_eq!(cfg.eq_band_settings[1].cutoff, 300);
+        assert_eq!(cfg.eq_band_settings[2].cutoff, 900);
+        // Slots 3..9 filled from the ISO default at their respective indices.
+        let defaults = default_eq_band_settings();
+        for i in 3..10 {
+            assert_eq!(cfg.eq_band_settings[i], defaults[i]);
+        }
+    }
+
+    #[test]
+    fn ensure_eq_bands_leaves_full_lists_alone() {
+        let mut cfg = Config::default();
+        let mut custom = default_eq_band_settings();
+        // Tweak one so we can spot mutation.
+        custom[5].gain = 87;
+        cfg.eq_band_settings = custom.clone();
+        cfg.ensure_eq_bands();
+        assert_eq!(cfg.eq_band_settings, custom);
+    }
 }

@@ -392,4 +392,172 @@ mod tests {
         assert!(q.is_empty());
         assert_eq!(q.current_index(), None);
     }
+
+    // ------------------------------------------------------------------
+    // RepeatMode enum helpers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn repeat_mode_labels_and_cycle() {
+        assert_eq!(RepeatMode::Off.label(), "off");
+        assert_eq!(RepeatMode::All.label(), "all");
+        assert_eq!(RepeatMode::One.label(), "one");
+        // Cycle: off → all → one → off
+        assert_eq!(RepeatMode::Off.next(), RepeatMode::All);
+        assert_eq!(RepeatMode::All.next(), RepeatMode::One);
+        assert_eq!(RepeatMode::One.next(), RepeatMode::Off);
+    }
+
+    // ------------------------------------------------------------------
+    // advance() under each RepeatMode
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn advance_repeat_one_sticks_on_current() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 1);
+        q.set_repeat(RepeatMode::One);
+        assert_eq!(q.advance(), Some(1));
+        assert_eq!(q.advance(), Some(1));
+        assert_eq!(q.current().unwrap().id, "b");
+    }
+
+    #[test]
+    fn advance_repeat_all_wraps_to_zero_past_end() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 2);
+        q.set_repeat(RepeatMode::All);
+        assert_eq!(q.advance(), Some(0));
+        assert_eq!(q.current().unwrap().id, "a");
+    }
+
+    #[test]
+    fn advance_repeat_off_still_stops_at_end() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 1);
+        q.set_repeat(RepeatMode::Off);
+        assert_eq!(q.advance(), None);
+        assert_eq!(q.current_index(), None);
+    }
+
+    // ------------------------------------------------------------------
+    // back() under each RepeatMode
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn back_repeat_one_sticks_on_current() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 1);
+        q.set_repeat(RepeatMode::One);
+        assert_eq!(q.back(), Some(1));
+        assert_eq!(q.current().unwrap().id, "b");
+    }
+
+    #[test]
+    fn back_repeat_all_wraps_to_last_from_index_zero() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 0);
+        q.set_repeat(RepeatMode::All);
+        assert_eq!(q.back(), Some(2));
+        assert_eq!(q.current().unwrap().id, "c");
+    }
+
+    #[test]
+    fn back_repeat_off_stops_at_zero() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 0);
+        q.set_repeat(RepeatMode::Off);
+        assert_eq!(q.back(), Some(0));
+    }
+
+    // ------------------------------------------------------------------
+    // peek_next_item — used by the crossfade preload path
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn peek_next_returns_next_in_queue_by_default() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 0);
+        assert_eq!(q.peek_next_item().unwrap().id, "b");
+    }
+
+    #[test]
+    fn peek_next_at_end_returns_none_when_repeat_off() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 1);
+        assert!(q.peek_next_item().is_none());
+    }
+
+    #[test]
+    fn peek_next_repeat_all_wraps_to_first() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 1);
+        q.set_repeat(RepeatMode::All);
+        assert_eq!(q.peek_next_item().unwrap().id, "a");
+    }
+
+    #[test]
+    fn peek_next_repeat_one_returns_current_item() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b")], 0);
+        q.set_repeat(RepeatMode::One);
+        assert_eq!(q.peek_next_item().unwrap().id, "a");
+    }
+
+    #[test]
+    fn peek_next_on_empty_returns_none() {
+        let q = PlaybackQueue::new();
+        assert!(q.peek_next_item().is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // Shuffle
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn set_shuffle_keeps_currently_playing_item_in_place() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c"), item("d")], 1);
+        // Fisher-Yates over items[2..], so items[0..=1] must be untouched.
+        q.set_shuffle(true);
+        let items = q.items();
+        assert_eq!(items[0].id, "a");
+        assert_eq!(items[1].id, "b");
+        // items[2..=3] are some permutation of {"c", "d"}.
+        let tail: Vec<&str> = items[2..].iter().map(|i| i.id.as_str()).collect();
+        assert!(tail.contains(&"c"));
+        assert!(tail.contains(&"d"));
+        assert!(q.shuffle_enabled());
+    }
+
+    #[test]
+    fn set_shuffle_false_flips_flag_without_reordering() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c")], 0);
+        q.set_shuffle(true);
+        let after_on = ids(&q);
+        q.set_shuffle(false);
+        // Turning shuffle off is documented as not re-sorting.
+        assert_eq!(ids(&q), after_on);
+        assert!(!q.shuffle_enabled());
+    }
+
+    #[test]
+    fn reshuffle_all_pins_current_to_index_zero() {
+        let q = PlaybackQueue::new();
+        q.replace(vec![item("a"), item("b"), item("c"), item("d")], 2);
+        q.reshuffle_all();
+        assert_eq!(q.current_index(), Some(0));
+        // Contents preserved as a permutation.
+        let mut got: Vec<String> = q.items().into_iter().map(|i| i.id).collect();
+        got.sort();
+        assert_eq!(got, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn reshuffle_all_on_empty_is_noop() {
+        let q = PlaybackQueue::new();
+        q.reshuffle_all();
+        assert!(q.is_empty());
+    }
 }

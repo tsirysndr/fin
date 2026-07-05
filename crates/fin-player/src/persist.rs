@@ -97,3 +97,110 @@ fn write_atomically(path: &Path, snap: &PersistedQueue) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::{QueueItem, RepeatMode};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn item(id: &str) -> QueueItem {
+        QueueItem {
+            id: id.into(),
+            title: id.into(),
+            subtitle: String::new(),
+            stream_url: format!("http://example/{id}"),
+            image_url: None,
+            duration_secs: Some(180),
+            is_video: false,
+            content_type: "audio/flac".into(),
+        }
+    }
+
+    fn tmp_path(name: &str) -> std::path::PathBuf {
+        // Unique-per-call so parallel tests don't step on each other.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir()
+            .join(format!("fin-persist-test-{name}-{}-{n}.json", std::process::id()))
+    }
+
+    // ------------------------------------------------------------------
+    // Load edge cases
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn load_returns_none_when_path_missing() {
+        let path = tmp_path("missing");
+        // Sanity: file truly doesn't exist.
+        assert!(!path.exists());
+        assert!(load(&path).is_none());
+    }
+
+    #[test]
+    fn load_returns_none_on_malformed_json() {
+        let path = tmp_path("bad-json");
+        std::fs::write(&path, b"this is not JSON at all").unwrap();
+        assert!(load(&path).is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ------------------------------------------------------------------
+    // Serde round-trip through write_atomically + load
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn write_then_load_round_trips_every_field() {
+        let path = tmp_path("round-trip");
+        let snap = PersistedQueue {
+            items: vec![item("a"), item("b")],
+            current_index: Some(1),
+            shuffle: true,
+            repeat: RepeatMode::All,
+            position_secs: 42.5,
+        };
+        write_atomically(&path, &snap).expect("write");
+        let restored = load(&path).expect("load");
+        assert_eq!(restored.items.len(), 2);
+        assert_eq!(restored.items[1].id, "b");
+        assert_eq!(restored.current_index, Some(1));
+        assert!(restored.shuffle);
+        assert_eq!(restored.repeat, RepeatMode::All);
+        assert!((restored.position_secs - 42.5).abs() < 1e-9);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ------------------------------------------------------------------
+    // Backward compatibility: older writers didn't emit every field
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn load_accepts_partial_json_with_defaults() {
+        // Emulate an older on-disk shape that predates the shuffle / repeat
+        // / position_secs additions. Every new field has #[serde(default)],
+        // so this must still parse into a zero-value snapshot.
+        let path = tmp_path("legacy");
+        std::fs::write(&path, br#"{"items": []}"#).unwrap();
+        let snap = load(&path).expect("load");
+        assert!(snap.items.is_empty());
+        assert_eq!(snap.current_index, None);
+        assert!(!snap.shuffle);
+        assert_eq!(snap.repeat, RepeatMode::Off);
+        assert_eq!(snap.position_secs, 0.0);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ------------------------------------------------------------------
+    // Write is atomic — no stray .tmp left behind
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn write_atomically_removes_the_temp_file() {
+        let path = tmp_path("atomic");
+        write_atomically(&path, &PersistedQueue::default()).expect("write");
+        // The .tmp sibling MUST be gone after the rename step.
+        assert!(!path.with_extension("json.tmp").exists());
+        assert!(path.exists());
+        let _ = std::fs::remove_file(&path);
+    }
+}

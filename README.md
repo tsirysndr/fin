@@ -325,13 +325,13 @@ fin config --show|--path    # inspect config
 
 Tab order — the default screen is **Music**:
 
-  `1` Music • `2` Videos • `3` Playlists • `4` Queue • `5` Search • `6` Devices • `7` Settings
+  `1` Music • `2` Videos • `3` Playlists • `4` Favorites • `5` Queue • `6` Search • `7` Devices • `8` Settings
 
 | Key                          | Action                              |
 |------------------------------|-------------------------------------|
 | `?`                          | show / hide the full keyboard-shortcuts help modal |
 | `Tab` / `Shift+Tab`          | next / prev screen                  |
-| `1`…`7`                      | jump to Music / Videos / Playlists / Queue / Search / Devices / Settings |
+| `1`…`8`                      | jump to Music / Videos / Playlists / Favorites / Queue / Search / Devices / Settings |
 | `/`                          | jump to Search & focus input        |
 | `↑` `↓` / `k` `j`            | move selection                      |
 | `PgUp` / `PgDown`            | jump 10 rows                        |
@@ -339,6 +339,7 @@ Tab order — the default screen is **Music**:
 | `x`                          | play the highlighted container as one queue **without** drilling in (album → all tracks, playlist → all items) |
 | `a`                          | enqueue the highlighted item        |
 | `n`                          | play the highlighted item **next**  |
+| `Shift+L` / `Shift+D`        | **like / dislike** — add or remove the highlighted item (or the playing track) from Favorites; Jellyfin favorites, Subsonic stars |
 | `z`                          | toggle shuffle                      |
 | `Shift+R`                    | cycle repeat mode (off → all → one) |
 | `g`                          | cycle ReplayGain (off → track → album) |

@@ -33,7 +33,7 @@ pub const HELP_SECTIONS: &[HelpSection] = &[
         title: "Navigation",
         entries: &[
             HelpEntry { key: "Tab / Shift+Tab", description: "next / prev screen" },
-            HelpEntry { key: "1 … 7", description: "jump to Music / Videos / Playlists / Queue / Search / Devices / Settings" },
+            HelpEntry { key: "1 … 8", description: "jump to Music / Videos / Playlists / Favorites / Queue / Search / Devices / Settings" },
             HelpEntry { key: "↑ ↓ / k j", description: "move selection" },
             HelpEntry { key: "PgUp / PgDown", description: "jump 10 rows" },
             HelpEntry { key: "Enter", description: "drill in / play leaf / connect (Devices) / switch server (Settings)" },
@@ -55,6 +55,8 @@ pub const HELP_SECTIONS: &[HelpSection] = &[
             HelpEntry { key: "s", description: "stop" },
             HelpEntry { key: "< / > (or h / l)", description: "previous / next track" },
             HelpEntry { key: "+ / −", description: "volume up / down" },
+            HelpEntry { key: "Shift+L", description: "like — favorite/star the highlighted item (or the playing track)" },
+            HelpEntry { key: "Shift+D", description: "dislike — remove it from favorites" },
         ],
     },
     HelpSection {

@@ -93,6 +93,7 @@ pub struct App {
     open_album: Arc<Mutex<Option<BaseItem>>>,
     series_children: Arc<Mutex<Vec<BaseItem>>>,
     open_series: Arc<Mutex<Option<BaseItem>>>,
+    favorites_items: Arc<Mutex<Vec<BaseItem>>>,
     search_results: Arc<Mutex<Vec<BaseItem>>>,
     devices: Arc<Mutex<Vec<RemoteDevice>>>,
     search_generation: Arc<AtomicU64>,
@@ -153,6 +154,7 @@ impl App {
             open_album: Arc::new(Mutex::new(None)),
             series_children: Arc::new(Mutex::new(vec![])),
             open_series: Arc::new(Mutex::new(None)),
+            favorites_items: Arc::new(Mutex::new(vec![])),
             search_results: Arc::new(Mutex::new(vec![])),
             devices: Arc::new(Mutex::new(vec![])),
             search_generation: Arc::new(AtomicU64::new(0)),
@@ -204,6 +206,7 @@ impl App {
                     self.playlists.lock().clone()
                 }
             }
+            Screen::Favorites => self.favorites_items.lock().clone(),
             Screen::Queue => {
                 let items = self.playback_state.lock().queue.clone();
                 items
@@ -313,6 +316,23 @@ impl App {
                         Ok(v) => *out.lock() = v,
                         Err(e) => {
                             *status.lock() = Some((format!("playlists: {}", e), Instant::now()))
+                        }
+                    }
+                });
+            }
+            Screen::Favorites => {
+                let jf = self.jf();
+                let out = self.favorites_items.clone();
+                let status = self.status_message.clone();
+                tokio::spawn(async move {
+                    match jf.favorites().await {
+                        Ok(v) => {
+                            *status.lock() =
+                                Some((format!("♥ {} favorite(s)", v.len()), Instant::now()));
+                            *out.lock() = v;
+                        }
+                        Err(e) => {
+                            *status.lock() = Some((format!("favorites: {}", e), Instant::now()))
                         }
                     }
                 });
@@ -563,6 +583,59 @@ impl App {
         }
     }
 
+    /// `Shift+L` / `Shift+D` — like or dislike. Acts on the highlighted item
+    /// when the active screen lists library items; on Devices/Settings (or
+    /// with nothing selected) it falls back to the now-playing track, so a
+    /// track can be liked from anywhere while it plays.
+    ///
+    /// Like maps to Jellyfin "favorite" / Subsonic "star"; dislike removes
+    /// it. When the Favorites screen is showing, the list reloads after the
+    /// call so a dislike drops the row immediately.
+    fn like_or_dislike(&self, like: bool) {
+        let target = match self.screen {
+            Screen::Devices | Screen::Settings => None,
+            _ => self.selected_item(),
+        };
+        let target = target.or_else(|| {
+            self.playback_state
+                .lock()
+                .now_playing
+                .as_ref()
+                .map(queue_item_to_base_item)
+        });
+        let Some(item) = target else {
+            self.set_status("Nothing to like — select an item or play something.");
+            return;
+        };
+        let jf = self.jf();
+        let status = self.status_message.clone();
+        let refresh = (self.screen == Screen::Favorites).then(|| self.favorites_items.clone());
+        let name = item.name.clone();
+        tokio::spawn(async move {
+            match jf.set_favorite(&item.id, like).await {
+                Ok(()) => {
+                    *status.lock() = Some((
+                        if like {
+                            format!("♥ Liked “{}”", name)
+                        } else {
+                            format!("♡ Removed “{}” from favorites", name)
+                        },
+                        Instant::now(),
+                    ));
+                    if let Some(out) = refresh {
+                        if let Ok(v) = jf.favorites().await {
+                            *out.lock() = v;
+                        }
+                    }
+                }
+                Err(e) => {
+                    *status.lock() =
+                        Some((format!("favorite failed: {}", e), Instant::now()))
+                }
+            }
+        });
+    }
+
     async fn play_selected(&mut self, mode: PlayMode) {
         let Some(item) = self.selected_item() else {
             self.set_status("Nothing selected.");
@@ -794,6 +867,7 @@ impl App {
         self.playlists.lock().clear();
         self.playlist_items.lock().clear();
         *self.open_playlist.lock() = None;
+        self.favorites_items.lock().clear();
         self.search_results.lock().clear();
         self.set_status(format!(
             "◉ Switched to `{}` ({}, as {})",
@@ -1184,20 +1258,25 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.load_screen().await;
         }
         (KeyCode::Char('4'), _) => {
+            app.screen = Screen::Favorites;
+            app.list_state.select(Some(0));
+            app.load_screen().await;
+        }
+        (KeyCode::Char('5'), _) => {
             app.screen = Screen::Queue;
             app.list_state.select(Some(0));
         }
-        (KeyCode::Char('5'), _) => {
+        (KeyCode::Char('6'), _) => {
             app.screen = Screen::Search;
             app.list_state.select(Some(0));
             app.search_input_focused = true;
         }
-        (KeyCode::Char('6'), _) => {
+        (KeyCode::Char('7'), _) => {
             app.screen = Screen::Devices;
             app.list_state.select(Some(0));
             app.load_screen().await;
         }
-        (KeyCode::Char('7'), _) => {
+        (KeyCode::Char('8'), _) => {
             app.screen = Screen::Settings;
             app.list_state.select(Some(0));
         }
@@ -1334,6 +1413,15 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let current = renderer.state().shuffle;
             let _ = renderer.set_shuffle(!current).await;
             app.set_status(if current { "Shuffle off" } else { "Shuffle on" });
+        }
+        // Shift+L likes (favorite/star), Shift+D dislikes (remove). Lowercase
+        // `l` is next-track and `d` is queue-remove, so only the shifted
+        // variants reach here.
+        (KeyCode::Char('L'), _) => {
+            app.like_or_dislike(true);
+        }
+        (KeyCode::Char('D'), _) => {
+            app.like_or_dislike(false);
         }
         // Shift+R cycles repeat (`r` alone refreshes the screen; `l` is next).
         (KeyCode::Char('R'), _) => {
@@ -1594,6 +1682,11 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             );
             draw_list_with_title(f, area, app, &title);
         }
+        Screen::Favorites => {
+            let count = app.favorites_items.lock().len();
+            let title = format!(" ♥ Favorites — {} item(s) ", count);
+            draw_list_with_title(f, area, app, &title);
+        }
         Screen::Music if app.open_album.lock().is_none() => {
             draw_list(f, area, app, " ♪ Music — Albums ")
         }
@@ -1652,6 +1745,7 @@ fn draw_list_with_title(f: &mut Frame<'_>, area: Rect, app: &mut App, title: &st
             Screen::Queue => "Queue is empty — press Enter on an item to play, `a` to enqueue.",
             Screen::Music | Screen::Videos => "Loading… (press `r` to refresh)",
             Screen::Playlists => "No playlists yet.",
+            Screen::Favorites => "No favorites yet — press Shift+L on an item to like it.",
             Screen::Search if app.search_query.trim().is_empty() => {
                 "type to search — results update as you type"
             }
@@ -2087,7 +2181,7 @@ fn draw_settings(f: &mut Frame<'_>, area: Rect, app: &mut App) {
             Span::styled("  Renderer      ", title_style()),
             Span::styled(renderer_pref, accent_style()),
             Span::styled(
-                "   (press m for local, 6 → Enter for a chromecast / UPnP renderer)",
+                "   (press m for local, 7 → Enter for a chromecast / UPnP renderer)",
                 muted_style(),
             ),
         ]),
@@ -2307,7 +2401,7 @@ fn draw_status_bar(f: &mut Frame<'_>, area: Rect, app: &App) {
             None => None,
         }
     };
-    let help = " ?: help  tab: screen  ↑↓: nav  enter: play/drill  space: pause  s: stop  </>: skip  +/-: vol  z: shuffle  R: repeat  g: replaygain  f/F: crossfade  E: eq  b/B: bass  y/Y: treble  m: local  t: server  /: search  esc: back  q: quit ";
+    let help = " ?: help  tab: screen  ↑↓: nav  enter: play/drill  space: pause  s: stop  </>: skip  +/-: vol  L/D: like/dislike  z: shuffle  R: repeat  g: replaygain  f/F: crossfade  E: eq  b/B: bass  y/Y: treble  m: local  t: server  /: search  esc: back  q: quit ";
     // Errors/warnings pop in warn-red; other status messages use the primary
     // teal so they stand out from the muted help text.
     let (text, style) = match msg {

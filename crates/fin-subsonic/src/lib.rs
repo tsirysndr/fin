@@ -207,6 +207,33 @@ impl SubsonicClient {
         Ok(p.entry.unwrap_or_default().into_iter().map(song_to_base_item).collect())
     }
 
+    /// Everything the user has starred — albums first, then songs, matching
+    /// the order `getStarred2` reports them in. Starred *artists* are
+    /// skipped: the browse layer has no artist drill-in for Subsonic, so
+    /// surfacing them would produce rows Enter can't do anything with.
+    pub async fn starred(&self) -> Result<Vec<BaseItem>> {
+        let resp: StarredResp = self.get_json("getStarred2", &[]).await?;
+        resp.check()?;
+        let s = resp.starred2().unwrap_or_default();
+        let mut out = Vec::new();
+        for a in s.album.unwrap_or_default() {
+            out.push(album_to_base_item(a));
+        }
+        for song in s.song.unwrap_or_default() {
+            out.push(song_to_base_item(song));
+        }
+        Ok(out)
+    }
+
+    /// Star (`star`) or unstar (`unstar`) a song / album / artist by id.
+    pub async fn set_star(&self, id: &str, star: bool) -> Result<()> {
+        let endpoint = if star { "star" } else { "unstar" };
+        let resp: PingResp = self
+            .get_json(endpoint, &[("id", id.to_string())])
+            .await?;
+        resp.check()
+    }
+
     /// Report that a track just started playing (`submission=false` — the
     /// Subsonic vocabulary calls this "now playing"). Fills in `time` with
     /// the current wall-clock so downstream agents like Navidrome's
@@ -518,6 +545,37 @@ impl PlaylistsResp {
     }
     fn playlists(self) -> Option<Playlists> {
         self.r.playlists
+    }
+}
+
+#[derive(Deserialize)]
+struct StarredResp {
+    #[serde(rename = "subsonic-response")]
+    r: StarredInner,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StarredInner {
+    #[serde(default = "default_status")]
+    status: String,
+    #[serde(default)]
+    error: Option<SubsonicError>,
+    #[serde(default)]
+    starred2: Option<Starred2>,
+}
+#[derive(Deserialize, Default)]
+struct Starred2 {
+    #[serde(default)]
+    album: Option<Vec<Album>>,
+    #[serde(default)]
+    song: Option<Vec<Song>>,
+}
+impl StarredResp {
+    fn check(&self) -> Result<()> {
+        check_status(&self.r.status, self.r.error.as_ref())
+    }
+    fn starred2(self) -> Option<Starred2> {
+        self.r.starred2
     }
 }
 

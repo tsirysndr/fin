@@ -11,6 +11,7 @@ pub enum Screen {
     Music,
     Videos,
     Playlists,
+    Favorites,
     Queue,
     Search,
     Devices,
@@ -22,6 +23,7 @@ impl Screen {
         Screen::Music,
         Screen::Videos,
         Screen::Playlists,
+        Screen::Favorites,
         Screen::Queue,
         Screen::Search,
         Screen::Devices,
@@ -33,6 +35,7 @@ impl Screen {
             Screen::Music => "♪",
             Screen::Videos => "▶",
             Screen::Playlists => "▤",
+            Screen::Favorites => "♥",
             Screen::Queue => "≡",
             Screen::Search => "⌕",
             Screen::Devices => "◈",
@@ -45,6 +48,7 @@ impl Screen {
             Screen::Music => "Music",
             Screen::Videos => "Videos",
             Screen::Playlists => "Playlists",
+            Screen::Favorites => "Favorites",
             Screen::Queue => "Queue",
             Screen::Search => "Search",
             Screen::Devices => "Devices",
@@ -229,13 +233,14 @@ mod tests {
     #[test]
     fn screen_all_matches_declared_tab_order() {
         // The header row in the TUI walks Screen::ALL in this order; if it
-        // drifts, the `1`…`7` shortcuts silently jump to the wrong tab.
+        // drifts, the `1`…`8` shortcuts silently jump to the wrong tab.
         assert_eq!(
             Screen::ALL,
             &[
                 Screen::Music,
                 Screen::Videos,
                 Screen::Playlists,
+                Screen::Favorites,
                 Screen::Queue,
                 Screen::Search,
                 Screen::Devices,
@@ -248,6 +253,8 @@ mod tests {
     fn screen_next_wraps_around_at_end() {
         assert_eq!(Screen::Music.next(), Screen::Videos);
         assert_eq!(Screen::Videos.next(), Screen::Playlists);
+        assert_eq!(Screen::Playlists.next(), Screen::Favorites);
+        assert_eq!(Screen::Favorites.next(), Screen::Queue);
         // Last tab wraps back to the first.
         assert_eq!(Screen::Settings.next(), Screen::Music);
     }

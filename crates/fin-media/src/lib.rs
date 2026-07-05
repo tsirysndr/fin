@@ -41,6 +41,13 @@ pub trait MediaClient: Send + Sync {
     async fn playlists(&self) -> Result<Vec<BaseItem>>;
     async fn playlist_items(&self, id: &str) -> Result<Vec<BaseItem>>;
 
+    /// Everything the user has liked — Jellyfin favorites, Subsonic stars.
+    async fn favorites(&self) -> Result<Vec<BaseItem>>;
+
+    /// Like (`true`) or un-like (`false`) an item — Jellyfin's
+    /// `FavoriteItems`, Subsonic's `star`/`unstar`.
+    async fn set_favorite(&self, item_id: &str, favorite: bool) -> Result<()>;
+
     fn stream_url(&self, item: &BaseItem, format: StreamFormat) -> Result<String>;
     fn image_url(&self, item_id: &str, tag: &str, width: u32) -> String;
 
@@ -114,6 +121,12 @@ impl MediaClient for JellyfinClient {
     async fn playlist_items(&self, id: &str) -> Result<Vec<BaseItem>> {
         JellyfinClient::playlist_items(self, id).await
     }
+    async fn favorites(&self) -> Result<Vec<BaseItem>> {
+        JellyfinClient::favorites(self).await
+    }
+    async fn set_favorite(&self, item_id: &str, favorite: bool) -> Result<()> {
+        JellyfinClient::set_favorite(self, item_id, favorite).await
+    }
 
     fn stream_url(&self, item: &BaseItem, format: StreamFormat) -> Result<String> {
         JellyfinClient::stream_url(self, item, format)
@@ -183,6 +196,12 @@ impl MediaClient for SubsonicClient {
     }
     async fn playlist_items(&self, id: &str) -> Result<Vec<BaseItem>> {
         SubsonicClient::playlist_items(self, id).await
+    }
+    async fn favorites(&self) -> Result<Vec<BaseItem>> {
+        SubsonicClient::starred(self).await
+    }
+    async fn set_favorite(&self, item_id: &str, favorite: bool) -> Result<()> {
+        SubsonicClient::set_star(self, item_id, favorite).await
     }
 
     fn stream_url(&self, item: &BaseItem, format: StreamFormat) -> Result<String> {

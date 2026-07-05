@@ -273,10 +273,25 @@ impl JellyfinClient {
         sort_by: Option<&str>,
         limit: Option<u32>,
     ) -> Result<Vec<BaseItem>> {
+        self.items_filtered(parent_id, include_types, recursive, sort_by, limit, None)
+            .await
+    }
+
+    /// Same as `items()` with an optional `Filters` value (e.g.
+    /// `"IsFavorite"`) threaded through to the server.
+    async fn items_filtered(
+        &self,
+        parent_id: Option<&str>,
+        include_types: &[&str],
+        recursive: bool,
+        sort_by: Option<&str>,
+        limit: Option<u32>,
+        filters: Option<&str>,
+    ) -> Result<Vec<BaseItem>> {
         // Single-page mode — caller wants exactly N results.
         if let Some(l) = limit {
             let (items, _) = self
-                .items_page(parent_id, include_types, recursive, sort_by, l, 0)
+                .items_page(parent_id, include_types, recursive, sort_by, l, 0, filters)
                 .await?;
             return Ok(items);
         }
@@ -287,7 +302,15 @@ impl JellyfinClient {
         let mut start: u32 = 0;
         loop {
             let (items, total) = self
-                .items_page(parent_id, include_types, recursive, sort_by, PAGE, start)
+                .items_page(
+                    parent_id,
+                    include_types,
+                    recursive,
+                    sort_by,
+                    PAGE,
+                    start,
+                    filters,
+                )
                 .await?;
             let got = items.len() as u32;
             all.extend(items);
@@ -318,6 +341,7 @@ impl JellyfinClient {
         sort_by: Option<&str>,
         limit: u32,
         start_index: u32,
+        filters: Option<&str>,
     ) -> Result<(Vec<BaseItem>, i64)> {
         let user_id = self.user_id.as_ref().context("not authenticated")?;
         let mut q: Vec<(String, String)> = vec![
@@ -338,6 +362,9 @@ impl JellyfinClient {
         if let Some(s) = sort_by {
             q.push(("SortBy".into(), s.into()));
             q.push(("SortOrder".into(), "Ascending".into()));
+        }
+        if let Some(f) = filters {
+            q.push(("Filters".into(), f.into()));
         }
         let url = self.url(&format!("/Users/{}/Items", user_id));
         debug!(?url, start_index, limit, "items page");
@@ -478,6 +505,43 @@ impl JellyfinClient {
     pub async fn playlists(&self) -> Result<Vec<BaseItem>> {
         self.items(None, &["Playlist"], true, Some("SortName"), None)
             .await
+    }
+
+    /// Every item the user has marked as a favorite — tracks, albums,
+    /// artists, movies, series, episodes. Paginated like `items()`.
+    pub async fn favorites(&self) -> Result<Vec<BaseItem>> {
+        self.items_filtered(
+            None,
+            &[
+                "Audio",
+                "MusicAlbum",
+                "MusicArtist",
+                "Movie",
+                "Series",
+                "Episode",
+            ],
+            true,
+            Some("SortName"),
+            None,
+            Some("IsFavorite"),
+        )
+        .await
+    }
+
+    /// Mark (`POST`) or unmark (`DELETE`) an item as a favorite.
+    pub async fn set_favorite(&self, item_id: &str, favorite: bool) -> Result<()> {
+        let user_id = self.user_id.as_ref().context("not authenticated")?;
+        let url = self.url(&format!("/Users/{}/FavoriteItems/{}", user_id, item_id));
+        let req = if favorite {
+            self.http.post(&url)
+        } else {
+            self.http.delete(&url)
+        };
+        req.headers(self.headers()?)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
     }
 
     /// All items in a playlist, paginated by `StartIndex` + `Limit=500`.

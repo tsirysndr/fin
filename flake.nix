@@ -42,7 +42,7 @@
           inherit src;
 
           pname = "fin";
-          version = "0.2.0";
+          version = "0.3.0";
           strictDeps = true;
 
           # No native TLS or system libs needed — pure Rust deps.

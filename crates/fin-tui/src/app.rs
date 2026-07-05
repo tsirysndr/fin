@@ -112,6 +112,12 @@ pub struct App {
     /// plus the moment we sent the last progress ping so we can throttle.
     scrobble_reported_id: Option<String>,
     scrobble_last_progress: Instant,
+    /// Highest position (in seconds) we've observed for the currently-
+    /// reported track. Used as the `PositionTicks` on report_stopped so
+    /// Jellyfin's ListenBrainz plugin sees the actual end-of-track
+    /// position, not `0` — which is what `state.position_secs` reads by
+    /// the time the queue has already advanced past the finished track.
+    scrobble_last_position: u64,
     scrobble_session_id: String,
     should_quit: bool,
     logo_pulse: u8,
@@ -159,6 +165,7 @@ impl App {
             help_open: false,
             scrobble_reported_id: None,
             scrobble_last_progress: Instant::now(),
+            scrobble_last_position: 0,
             // One session id per fin process — Jellyfin uses it to correlate
             // Start / Progress / Stopped events, Subsonic ignores it.
             scrobble_session_id: uuid::Uuid::new_v4().to_string(),
@@ -917,6 +924,19 @@ async fn emit_scrobble_events(app: &mut App) {
         .filter(|it| !it.is_video)
         .map(|it| it.id.clone());
 
+    // Snapshot the CURRENT track's position on every tick — the queue may
+    // advance to the next track before we get another chance to sample,
+    // and Jellyfin's ListenBrainz plugin requires a realistic
+    // PositionTicks on the Stopped event to record the listen.
+    if let (Some(reported), Some(cur)) = (&app.scrobble_reported_id, &now_playing_id) {
+        if reported == cur {
+            let pos = state.position_secs.max(0.0) as u64;
+            if pos > app.scrobble_last_position {
+                app.scrobble_last_position = pos;
+            }
+        }
+    }
+
     match (&app.scrobble_reported_id, &now_playing_id) {
         (Some(prev), Some(cur)) if prev == cur => {
             // Same track — throttled progress ping.
@@ -945,7 +965,10 @@ async fn emit_scrobble_events(app: &mut App) {
             if let Some(prev_id) = prev_opt.clone() {
                 let client_c = client.clone();
                 let session_id_c = session_id.clone();
-                let stopped_pos = state.position_secs.max(0.0) as u64;
+                // Use the snapshotted last-known position for the prior
+                // track — the live `state.position_secs` here already
+                // belongs to the newly-current track.
+                let stopped_pos = app.scrobble_last_position;
                 let stub = BaseItem {
                     id: prev_id.clone(),
                     name: prev_id,
@@ -988,6 +1011,8 @@ async fn emit_scrobble_events(app: &mut App) {
                 });
                 app.scrobble_reported_id = Some(cur.clone());
                 app.scrobble_last_progress = Instant::now();
+                // Reset position tracking for the newly-current track.
+                app.scrobble_last_position = state.position_secs.max(0.0) as u64;
             }
         }
         (Some(prev_id), None) => {
@@ -995,7 +1020,7 @@ async fn emit_scrobble_events(app: &mut App) {
             let prev_id = prev_id.clone();
             let client_c = client.clone();
             let session_id_c = session_id.clone();
-            let stopped_pos = state.position_secs.max(0.0) as u64;
+            let stopped_pos = app.scrobble_last_position;
             let stub = BaseItem {
                 id: prev_id.clone(),
                 name: prev_id,
@@ -1024,6 +1049,7 @@ async fn emit_scrobble_events(app: &mut App) {
                 }
             });
             app.scrobble_reported_id = None;
+            app.scrobble_last_position = 0;
         }
         (None, None) => {}
     }

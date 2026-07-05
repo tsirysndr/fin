@@ -198,10 +198,18 @@ impl MediaClient for SubsonicClient {
     async fn report_stopped(
         &self,
         item: &BaseItem,
-        _position_secs: u64,
+        position_secs: u64,
         _session_id: &str,
     ) -> Result<()> {
-        SubsonicClient::scrobble_submission(self, item).await
+        // Best-effort listen-start timestamp: now − however long we've
+        // been playing this track. Navidrome's ListenBrainz forwarder
+        // uses this as `listened_at`.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let time_ms = now_ms.saturating_sub(position_secs.saturating_mul(1000));
+        SubsonicClient::scrobble_submission(self, item, Some(time_ms)).await
     }
 }
 

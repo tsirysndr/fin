@@ -208,27 +208,34 @@ impl SubsonicClient {
     }
 
     /// Report that a track just started playing (`submission=false` — the
-    /// Subsonic vocabulary calls this "now playing"). Best-effort — the
-    /// server-side scrobble log is what most listeners care about, and we
-    /// still fire that on report_stopped.
+    /// Subsonic vocabulary calls this "now playing"). Fills in `time` with
+    /// the current wall-clock so downstream agents like Navidrome's
+    /// ListenBrainz forwarder have a consistent playback timestamp.
     pub async fn scrobble_now_playing(&self, item: &BaseItem) -> Result<()> {
-        self.scrobble(&item.id, false).await
+        self.scrobble(&item.id, false, current_time_ms()).await
     }
 
     /// Report a completed listen. `submission=true` tells the server to
-    /// record the track as played (this is what Last.fm-style scrobblers
-    /// pick up when they follow the Subsonic scrobble stream).
-    pub async fn scrobble_submission(&self, item: &BaseItem) -> Result<()> {
-        self.scrobble(&item.id, true).await
+    /// record the track as played; the `time` param carries the moment
+    /// the listen started (or, if unknown, the moment of submission —
+    /// most Subsonic forwarders honor whichever we send).
+    ///
+    /// The `time_ms` argument lets the caller record the real listen-start
+    /// (usually now − position_secs). Pass `None` to have `time` default
+    /// to the moment of submission.
+    pub async fn scrobble_submission(&self, item: &BaseItem, time_ms: Option<u64>) -> Result<()> {
+        self.scrobble(&item.id, true, time_ms.unwrap_or_else(current_time_ms))
+            .await
     }
 
-    async fn scrobble(&self, id: &str, submission: bool) -> Result<()> {
+    async fn scrobble(&self, id: &str, submission: bool, time_ms: u64) -> Result<()> {
         let resp: PingResp = self
             .get_json(
                 "scrobble",
                 &[
                     ("id", id.to_string()),
                     ("submission", submission.to_string()),
+                    ("time", time_ms.to_string()),
                 ],
             )
             .await?;
@@ -334,6 +341,16 @@ fn random_salt() -> String {
 fn md5_hex(input: &str) -> String {
     let digest = md5::compute(input.as_bytes());
     format!("{:x}", digest)
+}
+
+/// Current wall-clock in milliseconds since the Unix epoch. Used for the
+/// `time` param on scrobble calls — Navidrome and its ListenBrainz
+/// forwarder use this as the listen timestamp.
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 // ---- API response shapes --------------------------------------------------

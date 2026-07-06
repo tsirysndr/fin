@@ -51,6 +51,11 @@
           # as a legacy compatibility stub.
           nativeBuildInputs = [
             pkgs.pkg-config
+          ] ++ lib.optionals pkgs.stdenv.isDarwin [
+            # coreaudio-sys generates its CoreAudio bindings with bindgen at
+            # build time; bindgenHook provides libclang (LIBCLANG_PATH) and
+            # points clang at the Nix Apple SDK headers.
+            pkgs.rustPlatform.bindgenHook
           ];
 
           buildInputs = lib.optionals pkgs.stdenv.isDarwin [

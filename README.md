@@ -123,8 +123,8 @@ sudo apt install ./fin_0.3.1_arm64.deb
 Or add the Gemfury apt repo once and `apt install` normally:
 
 ```bash
-echo "deb [trusted=yes] https://apt.fury.io/tsirysndr/ /" \
-  | sudo tee /etc/apt/sources.list.d/tsirysndr.list
+echo "deb [trusted=yes] https://apt.fury.io/tsiry/ /" \
+  | sudo tee /etc/apt/sources.list.d/tsiry.list
 sudo apt update && sudo apt install fin
 ```
 
@@ -138,10 +138,10 @@ sudo dnf install \
 Or via the Gemfury yum repo:
 
 ```bash
-sudo tee /etc/yum.repos.d/tsirysndr.repo <<'EOF'
-[tsirysndr]
-name=tsirysndr
-baseurl=https://yum.fury.io/tsirysndr/
+sudo tee /etc/yum.repos.d/tsiry.repo <<'EOF'
+[tsiry]
+name=tsiry
+baseurl=https://yum.fury.io/tsiry/
 enabled=1
 gpgcheck=0
 EOF

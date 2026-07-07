@@ -1,0 +1,22 @@
+[package]
+name = "fin-mediarenderer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+percent-encoding.workspace = true
+socket2.workspace = true
+fin-player.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

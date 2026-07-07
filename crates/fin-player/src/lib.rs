@@ -17,7 +17,7 @@ pub use discovery::{discover_chromecasts, CastDevice};
 pub use local::LocalRenderer;
 pub use mpv::MpvRenderer;
 pub use persist::{load as load_persisted_queue, PersistedQueue};
-pub use queue::{PlaybackQueue, QueueItem, RepeatMode};
+pub use queue::{PlaybackQueue, QueueItem, RepeatMode, UPNP_CAST_ID_PREFIX};
 pub use renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 pub use replaygain::{ReplayGainInfo, ReplayGainMode, ReplayGainSettings};
 pub use symphonia_player::SymphoniaPlayer;

@@ -29,6 +29,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
   - [Nix](#nix)
 - [Getting started](#getting-started)
 - [Renderer selection](#renderer-selection)
+- [UPnP MediaRenderer — casting *to* fin](#upnp-mediarenderer--casting-to-fin)
 - [All settings](#all-settings)
 - [Multiple servers](#multiple-servers)
 - [Sub-commands](#sub-commands)
@@ -66,6 +67,13 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
   - **upnp** — SSDP discovery of any UPnP AV MediaRenderer, playback via
     AVTransport (`SetAVTransportURI` / `Play` / `Pause` / `Stop` / `Seek`)
     and volume via RenderingControl. Same auto-advancing queue.
+- **Cast *to* fin** — while the TUI runs, fin advertises itself as a
+  **UPnP MediaRenderer** on the LAN. Push streams at it from BubbleUPnP,
+  Kodi, Jellyfin's "Play On", or any other control point: audio decodes
+  in-process via symphonia, video opens in mpv, and the pushed track lands
+  in the Now Playing bar with a `⇊ UPnP` badge. On by default; opt out with
+  `--no-media-renderer` or `media_renderer.enabled = false`
+  (see [UPnP MediaRenderer](#upnp-mediarenderer--casting-to-fin)).
 - **Playback modes** — shuffle, repeat-off/all/one, [ReplayGain](#replaygain)
   (track / album), [crossfade](#crossfade) between adjacent tracks
   (traditional cosine curves *or* additive DJ-mixed), and a
@@ -242,6 +250,51 @@ When you pass `--chromecast NAME` or `--upnp NAME`, the renderer is switched
 to that protocol automatically and the named device is preferred on connect.
 If the name is not found on the network, fin picks the first device discovered.
 
+## UPnP MediaRenderer — casting *to* fin
+
+The renderer table above is about fin *sending* streams elsewhere. This is
+the opposite direction: while the TUI runs, fin also shows up on the LAN as
+a **UPnP AV MediaRenderer** device, so any control point — BubbleUPnP,
+Kodi, Jellyfin's "Play On", gupnp tools, another fin casting with
+`--upnp`, … — can push media at this machine.
+
+Incoming streams take the same local path as everything else: **audio is
+decoded in-process by symphonia** (never mpv), **video is handed to mpv**.
+The pushed track appears in the Now Playing bar with a violet `⇊ UPnP`
+badge and a one-shot status line (`⇊ receiving UPnP cast — <title>`), joins
+the queue like any other item, and answers the normal transport keys —
+`Space` pauses it, `s` stops it, `+`/`-` change volume. The control point
+sees those changes reflected back through AVTransport/RenderingControl
+state and GENA `LastChange` events.
+
+It's **on by default**. Three equivalent ways to turn it off:
+
+```bash
+fin --no-media-renderer          # this run only
+FIN_NO_MEDIA_RENDERER=1 fin     # environment
+```
+
+```toml
+# config.toml — persistent
+[media_renderer]
+enabled = false
+```
+
+Optional keys under the same table:
+
+```toml
+[media_renderer]
+enabled = true
+friendly_name = "office fin"   # picker name; default: fin (<hostname>)
+port = 47899                   # description/control port; 0 = ephemeral
+# uuid is generated on first launch and persisted so control points
+# recognize the device across restarts — no need to set it by hand.
+```
+
+Playback pushed by a control point is **not scrobbled** — the item ids are
+foreign to your media server, so session reports/scrobbles are skipped for
+cast-in tracks.
+
 ## All settings
 
 Every setting exists as both a CLI flag and a TOML key. Flags win.
@@ -258,6 +311,11 @@ Every setting exists as both a CLI flag and a TOML key. Flags win.
 | `--mpv`               |                     | `renderer = "mpv"`        |                  |
 | `--chromecast [NAME]` | `FIN_CHROMECAST`    | `last_chromecast`         |                  |
 | `--upnp [NAME]`       | `FIN_UPNP`          | `last_upnp`               |                  |
+| `--no-media-renderer` | `FIN_NO_MEDIA_RENDERER` | `media_renderer.enabled` | `true`       |
+| `--media-renderer`    |                     | `media_renderer.enabled = true` |            |
+|                       |                     | `media_renderer.friendly_name` | `fin (<hostname>)` |
+|                       |                     | `media_renderer.port`     | `0` _(ephemeral)_ |
+|                       |                     | `media_renderer.uuid`     | _(generated once)_ |
 | `-v`, `-vv`           |                     | _(log level)_             | `warn`           |
 
 Audio-side playback settings live under TOML sub-tables and are toggled from

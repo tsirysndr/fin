@@ -33,6 +33,7 @@ clap = { version = "4", features = ["derive", "env"] }
 mdns-sd = "0.11"
 rust_cast = "0.20"
 parking_lot = "0.12"
+socket2 = "0.5"
 unicode-width = "0.2"
 percent-encoding = "2"
 whoami = "1"
@@ -41,6 +42,7 @@ rpassword = "7"
 fin-config = { path = "crates/fin-config" }
 fin-jellyfin = { path = "crates/fin-jellyfin" }
 fin-media = { path = "crates/fin-media" }
+fin-mediarenderer = { path = "crates/fin-mediarenderer" }
 fin-player = { path = "crates/fin-player" }
 fin-subsonic = { path = "crates/fin-subsonic" }
 fin-tui = { path = "crates/fin-tui" }

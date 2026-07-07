@@ -605,6 +605,7 @@ dependencies = [
  "fin-config",
  "fin-jellyfin",
  "fin-media",
+ "fin-mediarenderer",
  "fin-player",
  "fin-tui",
  "rpassword",
@@ -615,6 +616,8 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "whoami",
 ]
 
 [[package]]
@@ -660,6 +663,23 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "fin-mediarenderer"
+version = "0.3.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fin-player",
+ "parking_lot",
+ "percent-encoding",
+ "reqwest",
+ "socket2 0.5.10",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

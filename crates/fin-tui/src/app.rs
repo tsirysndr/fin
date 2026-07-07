@@ -121,6 +121,9 @@ pub struct App {
     /// the time the queue has already advanced past the finished track.
     scrobble_last_position: u64,
     scrobble_session_id: String,
+    /// Id of the incoming UPnP cast we last flashed a status line for, so
+    /// the notice fires once per pushed track instead of every tick.
+    cast_notice_id: Option<String>,
     should_quit: bool,
     logo_pulse: u8,
 }
@@ -172,6 +175,7 @@ impl App {
             // One session id per fin process — Jellyfin uses it to correlate
             // Start / Progress / Stopped events, Subsonic ignores it.
             scrobble_session_id: uuid::Uuid::new_v4().to_string(),
+            cast_notice_id: None,
             should_quit: false,
             logo_pulse: 0,
         }
@@ -1055,6 +1059,7 @@ async fn event_loop(
         // Refresh live playback state each tick.
         *app.playback_state.lock() = app.renderer.lock().state();
 
+        notice_upnp_cast(app);
         emit_scrobble_events(app).await;
 
         terminal.draw(|f| draw(f, app))?;
@@ -1072,6 +1077,29 @@ async fn event_loop(
         }
     }
     Ok(())
+}
+
+/// Flash a status line when an external UPnP control point pushes media at
+/// us (fin acting as a MediaRenderer device). Playback starting with no
+/// user action in the TUI deserves an attribution; the Now Playing bar
+/// additionally shows a persistent `⇊ UPnP` badge for these items.
+fn notice_upnp_cast(app: &mut App) {
+    let cast = {
+        let state = app.playback_state.lock();
+        state
+            .now_playing
+            .as_ref()
+            .filter(|item| item.is_upnp_cast())
+            .map(|item| (item.id.clone(), item.title.clone()))
+    };
+    match cast {
+        Some((id, title)) if app.cast_notice_id.as_deref() != Some(id.as_str()) => {
+            app.cast_notice_id = Some(id);
+            app.set_status(format!("⇊ receiving UPnP cast — {}", title));
+        }
+        None => app.cast_notice_id = None,
+        _ => {}
+    }
 }
 
 /// Emit Jellyfin session events / Subsonic scrobbles for track transitions.
@@ -1096,10 +1124,14 @@ async fn emit_scrobble_events(app: &mut App) {
         return;
     }
 
+    // UPnP cast-in items carry synthetic `upnp-cast:` ids that don't exist
+    // on the media server — reporting them would 404. Treating them as
+    // "nothing playing" also fires the report_stopped edge for whatever
+    // library track the incoming cast displaced.
     let now_playing_id = state
         .now_playing
         .as_ref()
-        .filter(|it| !it.is_video)
+        .filter(|it| !it.is_video && !it.is_upnp_cast())
         .map(|it| it.id.clone());
 
     // Snapshot the CURRENT track's position on every tick — the queue may

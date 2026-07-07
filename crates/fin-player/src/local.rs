@@ -325,8 +325,13 @@ impl Renderer for LocalRenderer {
         match self.get_active() {
             Active::Audio => self.audio.state(),
             Active::Video => self.video.state(),
+            // Idle still reports the audio player's volume — it survives
+            // across stop/start, and volume queries (TUI slider, UPnP
+            // GetVolume) shouldn't snap back to 100% just because nothing
+            // is playing.
             Active::None => PlaybackState {
                 status: PlaybackStatus::Idle,
+                volume: self.audio.state().volume,
                 ..Default::default()
             },
         }

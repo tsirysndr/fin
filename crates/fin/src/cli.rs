@@ -109,6 +109,24 @@ pub struct Cli {
     #[arg(long, global = true, env = "FIN_UPNP", num_args = 0..=1, default_missing_value = "", conflicts_with = "chromecast")]
     pub upnp: Option<String>,
 
+    /// Don't advertise this machine as a UPnP MediaRenderer (cast target).
+    /// Persistent form: `media_renderer.enabled = false` in the config.
+    #[arg(
+        long = "no-media-renderer",
+        global = true,
+        env = "FIN_NO_MEDIA_RENDERER"
+    )]
+    pub no_media_renderer: bool,
+
+    /// Advertise this machine as a UPnP MediaRenderer even when the config
+    /// disables it. (It is on by default — this only overrides the TOML.)
+    #[arg(
+        long = "media-renderer",
+        global = true,
+        conflicts_with = "no_media_renderer"
+    )]
+    pub media_renderer: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

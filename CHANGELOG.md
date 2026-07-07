@@ -5,6 +5,29 @@ All notable changes to `fin` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Built-in UPnP MediaRenderer** (`fin-mediarenderer`) — fin now advertises
+  *itself* as a cast target on the LAN while the TUI runs. Any UPnP control
+  point (BubbleUPnP, Kodi, Jellyfin's "Play On", …) can push streams at
+  this machine: audio decodes in-process via symphonia, video is handed to
+  mpv, and the pushed track shows up in the Now Playing bar with a
+  `⇊ UPnP` badge plus a status-line notice naming what arrived. Includes
+  SSDP presence (alive/byebye + M-SEARCH answers), AVTransport /
+  RenderingControl / ConnectionManager SOAP control, and GENA `LastChange`
+  eventing. On by default; disable with `--no-media-renderer`,
+  `FIN_NO_MEDIA_RENDERER=1`, or `media_renderer.enabled = false`.
+  `media_renderer.friendly_name` / `.port` are also configurable, and the
+  device UDN is generated once and persisted so control points recognize
+  the machine across restarts.
+
+### Fixed
+- **Idle volume readback** — `LocalRenderer` reported 100% volume while
+  idle even after a volume change; it now mirrors the audio player's
+  actual volume, so the TUI slider and UPnP `GetVolume` stay truthful
+  between tracks.
+
 ## [0.3.1] - 2026-07-05
 
 ### Added

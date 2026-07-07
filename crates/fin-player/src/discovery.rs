@@ -38,15 +38,7 @@ pub async fn discover_chromecasts(scan_for: Duration) -> Result<Vec<CastDevice>>
         let remaining = deadline
             .saturating_duration_since(tokio::time::Instant::now())
             .min(Duration::from_millis(500));
-        let ev = timeout(remaining, async {
-            loop {
-                match receiver.recv_async().await {
-                    Ok(ev) => return Some(ev),
-                    Err(_) => return None,
-                }
-            }
-        })
-        .await;
+        let ev = timeout(remaining, async { receiver.recv_async().await.ok() }).await;
         let ev = match ev {
             Ok(Some(ev)) => ev,
             _ => continue,

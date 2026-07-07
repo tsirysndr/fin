@@ -4,6 +4,12 @@ use parking_lot::RwLock;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
+/// Queue-item id prefix for media pushed at us by an external UPnP control
+/// point (fin acting as a MediaRenderer device via `fin-mediarenderer`).
+/// These ids are synthetic — they don't exist on the media server — so the
+/// TUI badges them as an incoming cast and scrobbling skips them.
+pub const UPNP_CAST_ID_PREFIX: &str = "upnp-cast:";
+
 /// Everything a renderer needs to play a single item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueItem {
@@ -15,6 +21,14 @@ pub struct QueueItem {
     pub duration_secs: Option<u64>,
     pub is_video: bool,
     pub content_type: String,
+}
+
+impl QueueItem {
+    /// Whether this item was pushed by an external UPnP control point
+    /// rather than picked from the library in the TUI/CLI.
+    pub fn is_upnp_cast(&self) -> bool {
+        self.id.starts_with(UPNP_CAST_ID_PREFIX)
+    }
 }
 
 /// How the queue behaves once the last item finishes.

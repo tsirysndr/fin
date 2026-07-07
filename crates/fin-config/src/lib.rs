@@ -52,6 +52,44 @@ pub struct Config {
     /// Treble shelf cutoff in Hz. `0` = Rockbox default 3500 Hz.
     #[serde(default)]
     pub treble_cutoff: i32,
+    /// UPnP MediaRenderer device settings — fin advertising *itself* as a
+    /// cast target on the LAN (the receiving side; `renderer`/`last_upnp`
+    /// above are the sending side).
+    #[serde(default)]
+    pub media_renderer: MediaRendererSettings,
+}
+
+/// Settings for the built-in UPnP MediaRenderer device (`fin-mediarenderer`).
+/// On by default; disable with `--no-media-renderer` or `enabled = false`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaRendererSettings {
+    #[serde(default = "default_media_renderer_enabled")]
+    pub enabled: bool,
+    /// Name shown in control-point pickers. Default: `fin (<hostname>)`.
+    #[serde(default)]
+    pub friendly_name: Option<String>,
+    /// TCP port for the description/control endpoints. `0` = ephemeral.
+    #[serde(default)]
+    pub port: u16,
+    /// Stable device UDN, generated and persisted on first launch so
+    /// control points recognize the device across restarts.
+    #[serde(default)]
+    pub uuid: Option<String>,
+}
+
+fn default_media_renderer_enabled() -> bool {
+    true
+}
+
+impl Default for MediaRendererSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            friendly_name: None,
+            port: 0,
+            uuid: None,
+        }
+    }
 }
 
 /// The ISO-octave 10-band flat preset used when a fresh config has no

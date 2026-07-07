@@ -90,9 +90,23 @@ impl<'a> Widget for PlayerBar<'a> {
             None => ("Nothing playing".to_string(), String::new()),
         };
 
+        // Incoming-cast badge — this track was pushed at us by an external
+        // UPnP control point (fin acting as a MediaRenderer device), not
+        // picked in the TUI. Flag it so unexpected audio is attributable.
+        let cast_in_span = match &self.state.now_playing {
+            Some(item) if item.is_upnp_cast() => Span::styled(
+                "⇊ UPnP ",
+                Style::default()
+                    .fg(Palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            _ => Span::raw(""),
+        };
+
         // Row 1: status icon + track title + right-aligned renderer + volume
         let title_line = Line::from(vec![
             Span::styled(format!("{} ", icon), icon_style),
+            cast_in_span,
             Span::styled(
                 title_text,
                 Style::default()

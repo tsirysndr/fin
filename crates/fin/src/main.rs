@@ -167,6 +167,14 @@ fn load_and_merge(cli: &Cli) -> Result<Config> {
     } else if let Some(r) = cli.renderer {
         cfg.renderer = r.into();
     }
+
+    // Inline switches for the built-in MediaRenderer device. On by default;
+    // the flags only override the TOML for this run.
+    if cli.no_media_renderer {
+        cfg.media_renderer.enabled = false;
+    } else if cli.media_renderer {
+        cfg.media_renderer.enabled = true;
+    }
     Ok(cfg)
 }
 
@@ -271,11 +279,50 @@ fn pick_upnp(devices: &[UpnpDevice], preferred: Option<&str>) -> Result<UpnpDevi
     Ok(devices[0].clone())
 }
 
-async fn run_tui_cmd(cfg: Config) -> Result<()> {
+async fn run_tui_cmd(mut cfg: Config) -> Result<()> {
     let client = make_client(&cfg)?;
     let (renderer, _) = build_renderer(&cfg).await?;
+
+    // Give the advertised MediaRenderer a stable UDN so control points
+    // recognize this machine across restarts.
+    if cfg.media_renderer.enabled && cfg.media_renderer.uuid.is_none() {
+        cfg.media_renderer.uuid = Some(uuid::Uuid::new_v4().to_string());
+        if let Err(e) = cfg.save() {
+            tracing::warn!(?e, "could not persist media_renderer.uuid");
+        }
+    }
+    let mr = cfg.media_renderer.clone();
+
     let app = App::new(cfg, client, renderer);
-    run_tui(app).await
+
+    // The MediaRenderer device drives the same renderer cell the TUI holds,
+    // so an incoming cast plays through symphonia (audio) / mpv (video) and
+    // shows up in the Now Playing bar like any other queue item.
+    let server = if mr.enabled {
+        let opts = fin_mediarenderer::Options {
+            friendly_name: mr
+                .friendly_name
+                .clone()
+                .unwrap_or_else(|| format!("fin ({})", whoami::devicename())),
+            uuid: mr.uuid.clone().unwrap_or_default(),
+            port: mr.port,
+        };
+        match fin_mediarenderer::MediaRendererServer::start(opts, app.renderer.clone()).await {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(?e, "UPnP MediaRenderer failed to start");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let result = run_tui(app).await;
+    if let Some(s) = server {
+        s.shutdown().await;
+    }
+    result
 }
 
 async fn cmd_login(

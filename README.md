@@ -338,6 +338,11 @@ the TUI (see [Playback modes & effects](#playback-modes--effects)):
 Find the on-disk config with `fin config --path`; print it with
 `fin config --show`.
 
+While the TUI runs, logs are written to `fin.log` in the cache directory
+(next to `queue.json`) rather than stderr, so they can't corrupt the
+display; one-shot CLI commands log to stderr as usual. `-v` / `-vv` and
+`RUST_LOG` control the level either way.
+
 ## Multiple servers
 
 fin authenticates against as many servers as you like — Jellyfin and
@@ -430,9 +435,12 @@ shows a hint instead. The other number keys keep their meanings.
 
 ## Playback modes & effects
 
-All of these run only on the local renderer (audio path). Chromecast and
-UPnP receivers each do their own thing; toggles no-op on those renderers.
-Settings persist to `config.toml` and are mirrored back on next launch.
+**Shuffle and repeat work on every renderer** — the queue lives on the
+client, so they apply while casting to Chromecast or UPnP too. The audio
+*effects* (ReplayGain, crossfade, EQ, bass & treble) run only on the local
+renderer; Chromecast and UPnP receivers do their own DSP, so those toggles
+no-op there. Settings persist to `config.toml` and are mirrored back on
+next launch.
 
 ### Shuffle
 
@@ -546,6 +554,8 @@ automatically the moment the current one finishes (Chromecast:
   already streaming.
 - Skipping (`>` / `<`) triggers a `load` for the next queue item
   immediately — no waiting for the current one to finish.
+- Shuffle (`z`) and repeat (`Shift+R`) act on this client-side queue, so
+  they work while casting exactly like local playback.
 - Stopping clears the local queue and stops the receiver's playback.
 
 UPnP renderers without a `RenderingControl` service (rare, but it happens)
@@ -584,6 +594,9 @@ fin/
 │   ├── fin/               # binary — clap CLI + startup
 │   ├── fin-config/        # TOML config file, credentials, mode enums
 │   ├── fin-jellyfin/      # Jellyfin HTTP API client
+│   ├── fin-subsonic/      # Subsonic HTTP API client (Navidrome, Airsonic, …)
+│   ├── fin-media/         # MediaClient trait over both backends + login probe
+│   ├── fin-mediarenderer/ # built-in UPnP MediaRenderer — casting *to* fin
 │   ├── fin-player/        # Renderer trait, queue, symphonia audio path,
 │   │                      # mpv video, Chromecast + UPnP, replaygain,
 │   │                      # crossfade, queue persistence

@@ -482,6 +482,7 @@ async fn handle_command(
         }
         UpnpCommand::Next(reply) => {
             let res = if queue.advance().is_some() {
+                state.lock().current_index = queue.current_index();
                 if let Some(item) = queue.current() {
                     load_and_play(client, device, &item, state).await
                 } else {
@@ -494,6 +495,7 @@ async fn handle_command(
         }
         UpnpCommand::Previous(reply) => {
             let res = if queue.back().is_some() {
+                state.lock().current_index = queue.current_index();
                 if let Some(item) = queue.current() {
                     load_and_play(client, device, &item, state).await
                 } else {
@@ -575,6 +577,7 @@ async fn poll_status(
     if ended {
         *was_active = false;
         if queue.advance().is_some() {
+            state.lock().current_index = queue.current_index();
             if let Some(next) = queue.current() {
                 if let Err(e) = load_and_play(client, device, &next, state).await {
                     warn!(?e, "upnp: failed to load next queue item");

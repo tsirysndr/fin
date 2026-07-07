@@ -302,6 +302,7 @@ fn cast_worker(
                     if ended {
                         was_active_media = false;
                         if queue.advance().is_some() {
+                            state.lock().current_index = queue.current_index();
                             if let Some(next) = queue.current() {
                                 if let Err(e) = load_media(&rc, &session, &next, &state) {
                                     warn!(?e, "chromecast: failed to load next queue item");
@@ -449,6 +450,7 @@ fn handle_command(
         }
         CastCommand::Next(reply) => {
             let res = if queue.advance().is_some() {
+                state.lock().current_index = queue.current_index();
                 if let Some(item) = queue.current() {
                     load_media(rc, session, &item, state)
                 } else {
@@ -461,6 +463,7 @@ fn handle_command(
         }
         CastCommand::Previous(reply) => {
             let res = if queue.back().is_some() {
+                state.lock().current_index = queue.current_index();
                 if let Some(item) = queue.current() {
                     load_media(rc, session, &item, state)
                 } else {

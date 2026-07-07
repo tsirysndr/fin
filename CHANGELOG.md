@@ -5,7 +5,7 @@ All notable changes to `fin` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-07
 
 ### Added
 - **Built-in UPnP MediaRenderer** (`fin-mediarenderer`) — fin now advertises
@@ -22,11 +22,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device UDN is generated once and persisted so control points recognize
   the machine across restarts.
 
+### Changed
+- **Logs no longer corrupt the TUI** — while the TUI owns the terminal,
+  tracing output is routed to `fin.log` in the cache directory instead of
+  stderr (any GENA notify failure, cast-in notice, or playback warning
+  used to print straight over the interface). CLI one-shot commands still
+  log to stderr, and `-v`/`RUST_LOG` behave as before.
+
 ### Fixed
 - **Idle volume readback** — `LocalRenderer` reported 100% volume while
   idle even after a volume change; it now mirrors the audio player's
   actual volume, so the TUI slider and UPnP `GetVolume` stay truthful
   between tracks.
+- **Queue marker stuck while casting** — when playing to a UPnP or
+  Chromecast renderer, auto-advance and Next/Previous moved the queue
+  cursor without updating the shared playback state, so the Queue
+  screen's ▶ marker and `(n/total)` counter stayed on the old track.
+- **Shuffle & repeat while casting** — `z` and `Shift+R` were silent
+  no-ops on UPnP and Chromecast renderers; both now drive the shared
+  queue, so shuffle order and repeat one/all work the same as local
+  playback.
 
 ## [0.3.1] - 2026-07-05
 
@@ -106,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fzf-style instant search, playlist browsing, and drill-in navigation.
 - Full pagination of the Items endpoint so large libraries load completely.
 
+[0.4.0]: https://github.com/tsirysndr/fin/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tsirysndr/fin/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tsirysndr/fin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tsirysndr/fin/compare/v0.1.0...v0.2.0

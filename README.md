@@ -118,12 +118,12 @@ Download the `.deb` for your architecture from the
 
 ```bash
 # amd64
-curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.3.1_amd64.deb
-sudo apt install ./fin_0.3.1_amd64.deb
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.4.0_amd64.deb
+sudo apt install ./fin_0.4.0_amd64.deb
 
 # arm64 (Raspberry Pi 4/5, Apple-silicon VM, …)
-curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.3.1_arm64.deb
-sudo apt install ./fin_0.3.1_arm64.deb
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.4.0_arm64.deb
+sudo apt install ./fin_0.4.0_arm64.deb
 ```
 
 `apt` will pull in `libasound2` (ALSA runtime for cpal) and `mpv` automatically.
@@ -140,7 +140,7 @@ sudo apt update && sudo apt install fin
 
 ```bash
 sudo dnf install \
-  https://github.com/tsirysndr/fin/releases/latest/download/fin-0.3.1-1.x86_64.rpm
+  https://github.com/tsirysndr/fin/releases/latest/download/fin-0.4.0-1.x86_64.rpm
 ```
 
 Or via the Gemfury yum repo:

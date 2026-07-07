@@ -30,7 +30,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
-use crate::queue::{PlaybackQueue, QueueItem};
+use crate::queue::{PlaybackQueue, QueueItem, RepeatMode};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 
 const SSDP_ADDR: &str = "239.255.255.250:1900";
@@ -850,6 +850,25 @@ impl Renderer for UpnpRenderer {
 
     async fn set_volume(&self, volume: f32) -> Result<()> {
         self.send(|reply| UpnpCommand::Volume(volume, reply)).await
+    }
+
+    // Shuffle/repeat live entirely in our queue — the device only ever sees
+    // one URI at a time, so no SOAP round-trip is needed. The worker's
+    // auto-advance picks up the new order/mode on the next track end.
+    async fn set_shuffle(&self, on: bool) -> Result<()> {
+        self.queue.set_shuffle(on);
+        let items = self.queue.items();
+        let mut s = self.state.lock();
+        s.shuffle = on;
+        s.queue = items;
+        s.current_index = self.queue.current_index();
+        Ok(())
+    }
+
+    async fn set_repeat(&self, mode: RepeatMode) -> Result<()> {
+        self.queue.set_repeat(mode);
+        self.state.lock().repeat = mode;
+        Ok(())
     }
 
     fn state(&self) -> PlaybackState {

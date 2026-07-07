@@ -114,9 +114,8 @@ pub trait Renderer: Send + Sync {
     async fn seek(&self, position_secs: f64) -> anyhow::Result<()>;
     async fn set_volume(&self, volume: f32) -> anyhow::Result<()>;
 
-    /// Turn shuffle on or off. Default is a no-op — Chromecast and UPnP
-    /// renderers have their own device-side queue models that we haven't
-    /// wired shuffle into yet.
+    /// Turn shuffle on or off. Default is a no-op for renderers with no
+    /// queue of their own.
     async fn set_shuffle(&self, _on: bool) -> anyhow::Result<()> {
         Ok(())
     }

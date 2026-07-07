@@ -17,7 +17,7 @@ use rust_cast::channels::receiver::CastDeviceApp;
 use rust_cast::CastDevice as RcDevice;
 
 use crate::discovery::CastDevice;
-use crate::queue::{PlaybackQueue, QueueItem};
+use crate::queue::{PlaybackQueue, QueueItem, RepeatMode};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 
 const DEFAULT_DESTINATION_ID: &str = "receiver-0";
@@ -584,6 +584,25 @@ impl Renderer for ChromecastRenderer {
 
     async fn set_volume(&self, volume: f32) -> Result<()> {
         self.send(|reply| CastCommand::Volume(volume, reply)).await
+    }
+
+    // Shuffle/repeat live entirely in our queue — the receiver only ever
+    // sees one media item at a time, so no cast round-trip is needed. The
+    // worker's auto-advance picks up the new order/mode on the next track end.
+    async fn set_shuffle(&self, on: bool) -> Result<()> {
+        self.queue.set_shuffle(on);
+        let items = self.queue.items();
+        let mut s = self.state.lock();
+        s.shuffle = on;
+        s.queue = items;
+        s.current_index = self.queue.current_index();
+        Ok(())
+    }
+
+    async fn set_repeat(&self, mode: RepeatMode) -> Result<()> {
+        self.queue.set_repeat(mode);
+        self.state.lock().repeat = mode;
+        Ok(())
     }
 
     fn state(&self) -> PlaybackState {

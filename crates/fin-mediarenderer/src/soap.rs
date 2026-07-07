@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use fin_player::{PlaybackStatus, QueueItem, UPNP_CAST_ID_PREFIX};
 
@@ -168,7 +168,7 @@ async fn av_transport(inner: &Arc<Inner>, action: &str, body: &str) -> Result<St
             let uri = arg(body, "CurrentURI").ok_or(SoapError::INVALID_ARGS)?;
             let meta = arg(body, "CurrentURIMetaData").unwrap_or_default();
             let item = build_item(inner, &uri, &meta);
-            info!(
+            debug!(
                 title = %item.title,
                 video = item.is_video,
                 "UPnP cast-in: SetAVTransportURI"

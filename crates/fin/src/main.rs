@@ -21,7 +21,8 @@ use crate::cli::{Cli, Command, PlayArgs, ServerCmd};
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_tracing(cli.verbose);
+    let tui_mode = matches!(cli.command, None | Some(Command::Tui));
+    init_tracing(cli.verbose, tui_mode);
 
     // rustls 0.23 requires an explicit CryptoProvider. reqwest picks one via
     // its own feature flags, but `rust_cast` pulls in rustls without a
@@ -63,7 +64,7 @@ async fn main() -> Result<()> {
     }
 }
 
-fn init_tracing(verbose: u8) {
+fn init_tracing(verbose: u8, tui_mode: bool) {
     // mdns-sd logs an ERROR line when its ServiceDaemon shuts down
     // ("failed to send response of shutdown: sending on a closed channel")
     // during clean process exit. Cosmetic — silence it unless the user
@@ -73,11 +74,39 @@ fn init_tracing(verbose: u8) {
         1 => "info,fin=debug,mdns_sd=warn",
         _ => "debug",
     };
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into()))
-        .with_target(false)
-        .with_writer(io::stderr)
-        .try_init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into());
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false);
+
+    // While the TUI owns the terminal, anything written to stderr (GENA
+    // notify failures, UPnP cast-in traffic, replaygain warnings, ...)
+    // corrupts the display, so logs go to a file instead.
+    if tui_mode {
+        match tui_log_file() {
+            Ok(file) => {
+                let _ = builder
+                    .with_ansi(false)
+                    .with_writer(std::sync::Mutex::new(file))
+                    .try_init();
+            }
+            // No usable log file — drop logs rather than break the TUI.
+            Err(_) => {
+                let _ = builder.with_writer(io::sink).try_init();
+            }
+        }
+    } else {
+        let _ = builder.with_writer(io::stderr).try_init();
+    }
+}
+
+fn tui_log_file() -> Result<std::fs::File> {
+    let dir = fin_config::cache_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    Ok(std::fs::File::options()
+        .create(true)
+        .append(true)
+        .open(dir.join("fin.log"))?)
 }
 
 fn load_and_merge(cli: &Cli) -> Result<Config> {

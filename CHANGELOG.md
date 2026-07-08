@@ -5,6 +5,23 @@ All notable changes to `fin` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-08
+
+### Added
+- **MPRIS support** (`fin-mpris`) — on Linux and the BSDs, fin registers
+  `org.mpris.MediaPlayer2.fin` on the D-Bus session bus while the TUI
+  runs, so media keys, GNOME/KDE applets, waybar and `playerctl` can
+  drive playback: play/pause, next/previous, seek and SetPosition,
+  volume, shuffle and repeat (mapped to MPRIS `LoopStatus`), with track
+  metadata (title, artist, duration, cover art) pushed as
+  `PropertiesChanged`/`Seeked` signals. The MPRIS player shares the same
+  swappable renderer handle as the TUI and the UPnP MediaRenderer, so
+  desktop controls follow you when you switch to a Chromecast or UPnP
+  device. Built on zbus (pure Rust — no dbus system library needed);
+  starting without a session bus (headless/SSH) is a non-fatal warning.
+  A second fin instance falls back to a pid-suffixed bus name per the
+  MPRIS spec.
+
 ## [0.4.0] - 2026-07-07
 
 ### Added
@@ -121,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fzf-style instant search, playlist browsing, and drill-in navigation.
 - Full pagination of the Items endpoint so large libraries load completely.
 
+[0.5.0]: https://github.com/tsirysndr/fin/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tsirysndr/fin/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tsirysndr/fin/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tsirysndr/fin/compare/v0.2.0...v0.3.0

@@ -30,6 +30,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
 - [Getting started](#getting-started)
 - [Renderer selection](#renderer-selection)
 - [UPnP MediaRenderer — casting *to* fin](#upnp-mediarenderer--casting-to-fin)
+- [MPRIS — desktop media controls](#mpris--desktop-media-controls)
 - [All settings](#all-settings)
 - [Multiple servers](#multiple-servers)
 - [Sub-commands](#sub-commands)
@@ -74,6 +75,11 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
   in the Now Playing bar with a `⇊ UPnP` badge. On by default; opt out with
   `--no-media-renderer` or `media_renderer.enabled = false`
   (see [UPnP MediaRenderer](#upnp-mediarenderer--casting-to-fin)).
+- **MPRIS** (Linux & the BSDs) — while the TUI runs, fin registers on the
+  D-Bus session bus as `org.mpris.MediaPlayer2.fin`, so media keys,
+  GNOME/KDE applets, waybar, and `playerctl` control playback — whichever
+  renderer is active, Chromecast and UPnP included
+  (see [MPRIS](#mpris--desktop-media-controls)).
 - **Playback modes** — shuffle, repeat-off/all/one, [ReplayGain](#replaygain)
   (track / album), [crossfade](#crossfade) between adjacent tracks
   (traditional cosine curves *or* additive DJ-mixed), and a
@@ -294,6 +300,41 @@ port = 47899                   # description/control port; 0 = ephemeral
 Playback pushed by a control point is **not scrobbled** — the item ids are
 foreign to your media server, so session reports/scrobbles are skipped for
 cast-in tracks.
+
+## MPRIS — desktop media controls
+
+On **Linux and the BSDs**, fin registers itself on the D-Bus session bus as
+`org.mpris.MediaPlayer2.fin` while the TUI runs. That's the standard
+desktop media-player interface, so it works with whatever already speaks
+MPRIS:
+
+- **hardware media keys** (play/pause/next/previous) — even when the
+  terminal isn't focused,
+- **desktop applets** — GNOME's calendar-dropdown media widget, KDE's
+  Media Player plasmoid and lock-screen controls,
+- **bars** — waybar's `mpris` module and friends,
+- **`playerctl`** for scripting:
+
+```bash
+playerctl -p fin play-pause
+playerctl -p fin next
+playerctl -p fin metadata        # title, artist, duration, cover art
+playerctl -p fin position 30     # absolute seek (seconds)
+playerctl -p fin volume 0.5
+playerctl -p fin shuffle On
+playerctl -p fin loop Playlist   # = repeat all
+```
+
+MPRIS drives whatever renderer is currently active — switch to a
+Chromecast or UPnP device in the TUI and your media keys transparently
+control the cast session. Track metadata (title, artist, duration, cover
+art) is pushed to the desktop as it changes.
+
+There's nothing to configure and no system dependency to install (the
+D-Bus protocol is spoken natively — no `libdbus`). On a headless box with
+no session bus, fin simply logs a warning and carries on. A second fin
+instance registers as `org.mpris.MediaPlayer2.fin.instance<pid>`, per the
+MPRIS spec.
 
 ## All settings
 

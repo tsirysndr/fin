@@ -31,3 +31,6 @@ fin-media.workspace = true
 fin-mediarenderer.workspace = true
 fin-player.workspace = true
 fin-tui.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+fin-mpris.workspace = true

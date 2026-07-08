@@ -62,6 +62,8 @@
             pkgs.libiconv
           ] ++ lib.optionals pkgs.stdenv.isLinux [
             # cpal links against ALSA on Linux for the local audio output path.
+            # MPRIS needs no dbus dev lib: zbus is a pure-Rust D-Bus
+            # implementation that speaks to the session bus socket directly.
             pkgs.alsa-lib
           ];
 

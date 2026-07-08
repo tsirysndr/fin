@@ -5,12 +5,13 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "MPRIS (org.mpris.MediaPlayer2) D-Bus interface for fin — Linux only."
+description = "MPRIS (org.mpris.MediaPlayer2) D-Bus interface for fin — Linux and the BSDs."
 
-# The whole crate is a no-op off Linux (`#![cfg(target_os = "linux")]` in
-# lib.rs), so the dependencies are target-gated too: macOS/BSD builds never
-# pull zbus into the graph.
-[target.'cfg(target_os = "linux")'.dependencies]
+# The whole crate is a no-op on platforms without D-Bus (see the `#![cfg]`
+# in lib.rs), so the dependencies are target-gated too: macOS builds never
+# pull zbus into the graph. zbus is pure Rust, so the BSDs need no dbus
+# dev package — it speaks to the session bus socket directly.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 anyhow.workspace = true
 tokio.workspace = true
 tracing.workspace = true

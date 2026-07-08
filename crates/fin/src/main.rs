@@ -327,7 +327,12 @@ async fn run_tui_cmd(mut cfg: Config) -> Result<()> {
     // MPRIS mirrors the MediaRenderer below: media keys, desktop applets and
     // playerctl drive the same renderer cell the TUI holds. Failure is
     // non-fatal — headless boxes have no session bus.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     let mpris = match fin_mpris::MprisServer::start(app.renderer.clone()).await {
         Ok(s) => Some(s),
         Err(e) => {
@@ -360,7 +365,12 @@ async fn run_tui_cmd(mut cfg: Config) -> Result<()> {
     };
 
     let result = run_tui(app).await;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     if let Some(m) = mpris {
         m.shutdown();
     }

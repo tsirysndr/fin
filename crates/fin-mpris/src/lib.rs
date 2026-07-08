@@ -1,5 +1,5 @@
 //! fin on the desktop session bus — an **MPRIS** `org.mpris.MediaPlayer2`
-//! player, Linux only.
+//! player, on platforms with D-Bus (Linux and the BSDs).
 //!
 //! The mirror image of `fin-mediarenderer` for the local desktop: instead of
 //! LAN control points, this lets media keys, GNOME/KDE applets, waybar,
@@ -12,7 +12,12 @@
 //! task polls `Renderer::state()` and diffs snapshots into D-Bus
 //! `PropertiesChanged` / `Seeked` signals.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

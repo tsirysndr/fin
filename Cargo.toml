@@ -31,6 +31,7 @@ ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 clap = { version = "4", features = ["derive", "env"] }
 mdns-sd = "0.11"
+mpris-server = { version = "0.10", features = ["tokio"] }
 rust_cast = "0.20"
 parking_lot = "0.12"
 socket2 = "0.5"
@@ -43,6 +44,7 @@ fin-config = { path = "crates/fin-config" }
 fin-jellyfin = { path = "crates/fin-jellyfin" }
 fin-media = { path = "crates/fin-media" }
 fin-mediarenderer = { path = "crates/fin-mediarenderer" }
+fin-mpris = { path = "crates/fin-mpris" }
 fin-player = { path = "crates/fin-player" }
 fin-subsonic = { path = "crates/fin-subsonic" }
 fin-tui = { path = "crates/fin-tui" }

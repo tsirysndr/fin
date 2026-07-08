@@ -324,6 +324,18 @@ async fn run_tui_cmd(mut cfg: Config) -> Result<()> {
 
     let app = App::new(cfg, client, renderer);
 
+    // MPRIS mirrors the MediaRenderer below: media keys, desktop applets and
+    // playerctl drive the same renderer cell the TUI holds. Failure is
+    // non-fatal — headless boxes have no session bus.
+    #[cfg(target_os = "linux")]
+    let mpris = match fin_mpris::MprisServer::start(app.renderer.clone()).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(?e, "MPRIS player failed to start");
+            None
+        }
+    };
+
     // The MediaRenderer device drives the same renderer cell the TUI holds,
     // so an incoming cast plays through symphonia (audio) / mpv (video) and
     // shows up in the Now Playing bar like any other queue item.
@@ -348,6 +360,10 @@ async fn run_tui_cmd(mut cfg: Config) -> Result<()> {
     };
 
     let result = run_tui(app).await;
+    #[cfg(target_os = "linux")]
+    if let Some(m) = mpris {
+        m.shutdown();
+    }
     if let Some(s) = server {
         s.shutdown().await;
     }

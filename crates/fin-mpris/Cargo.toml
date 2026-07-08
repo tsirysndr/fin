@@ -1,0 +1,19 @@
+[package]
+name = "fin-mpris"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MPRIS (org.mpris.MediaPlayer2) D-Bus interface for fin — Linux only."
+
+# The whole crate is a no-op off Linux (`#![cfg(target_os = "linux")]` in
+# lib.rs), so the dependencies are target-gated too: macOS/BSD builds never
+# pull zbus into the graph.
+[target.'cfg(target_os = "linux")'.dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+fin-player.workspace = true
+mpris-server.workspace = true

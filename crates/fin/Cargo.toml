@@ -31,3 +31,6 @@ fin-media.workspace = true
 fin-mediarenderer.workspace = true
 fin-player.workspace = true
 fin-tui.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fin-mpris.workspace = true

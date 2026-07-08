@@ -198,11 +198,11 @@ jobs:
             os_version: "7.9"
             arch: x86-64
             install_deps: sudo pkg_add rust cmake
-          - label: openbsd-aarch64
-            os: openbsd
-            os_version: "7.9"
-            arch: arm64
-            install_deps: sudo pkg_add rust cmake
+          # - label: openbsd-aarch64
+          #   os: openbsd
+          #   os_version: "7.9"
+          #   arch: arm64
+          #   install_deps: sudo pkg_add rust cmake
 
     steps:
       - name: Checkout

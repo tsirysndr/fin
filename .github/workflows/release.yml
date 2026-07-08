@@ -173,36 +173,25 @@ jobs:
           # crypto provider), which uses its CMake builder and the bundled
           # "universal" bindings on the BSDs — no bindgen needed. mpv is a
           # runtime-only external process, nothing to install at build time.
+          #
+          # aarch64 BSD builds run under emulation and take hours, so they
+          # live in release-bsd-aarch64.yml and attach their tarballs to the
+          # release after it's published — they never block this workflow.
           - label: freebsd-amd64
             os: freebsd
             os_version: "14.3"
             arch: x86-64
-            install_deps: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust alsa-lib pkgconf cmake
-          - label: freebsd-aarch64
-            os: freebsd
-            os_version: "14.3"
-            arch: arm64
             install_deps: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust alsa-lib pkgconf cmake
           - label: netbsd-amd64
             os: netbsd
             os_version: "10.1"
             arch: x86-64
             install_deps: sudo pkgin -y update && sudo pkgin -y install rust alsa-lib pkgconf cmake
-          - label: netbsd-aarch64
-            os: netbsd
-            os_version: "10.1"
-            arch: arm64
-            install_deps: sudo pkgin -y update && sudo pkgin -y install rust alsa-lib pkgconf cmake
           - label: openbsd-amd64
             os: openbsd
             os_version: "7.9"
             arch: x86-64
             install_deps: sudo pkg_add rust cmake
-          # - label: openbsd-aarch64
-          #   os: openbsd
-          #   os_version: "7.9"
-          #   arch: arm64
-          #   install_deps: sudo pkg_add rust cmake
 
     steps:
       - name: Checkout

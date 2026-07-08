@@ -19,6 +19,7 @@
     target_os = "openbsd"
 ))]
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -60,6 +61,25 @@ impl Player {
     fn state(&self) -> PlaybackState {
         self.renderer().state()
     }
+}
+
+/// `Renderer` methods come from `async_trait`, whose boxed futures are
+/// `Send` but not `Sync` — while zbus (via `trait_variant::make(Send +
+/// Sync)`) requires interface futures to be both. Hop through a spawned
+/// task: `JoinHandle` *is* `Sync`, so the interface future never holds the
+/// boxed renderer future directly.
+///
+/// Deliberately NOT an `async fn`: an async fn keeps its arguments in the
+/// generated future's state, so the non-`Sync` `fut` would poison it before
+/// `spawn` even ran. A plain fn consumes `fut` eagerly and the returned
+/// future holds only the handle.
+fn sync_call<T, F>(fut: F) -> impl Future<Output = Result<T>>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T>> + Send + 'static,
+{
+    let task = tokio::spawn(fut);
+    async move { task.await.context("renderer task panicked")? }
 }
 
 fn to_fdo(e: anyhow::Error) -> fdo::Error {
@@ -191,62 +211,89 @@ impl RootInterface for Player {
 
 impl PlayerInterface for Player {
     async fn next(&self) -> fdo::Result<()> {
-        self.renderer().next().await.map_err(to_fdo)
+        let r = self.renderer();
+        sync_call(async move { r.next().await })
+            .await
+            .map_err(to_fdo)
     }
 
     async fn previous(&self) -> fdo::Result<()> {
-        self.renderer().previous().await.map_err(to_fdo)
+        let r = self.renderer();
+        sync_call(async move { r.previous().await })
+            .await
+            .map_err(to_fdo)
     }
 
     async fn pause(&self) -> fdo::Result<()> {
-        self.renderer().pause().await.map_err(to_fdo)
+        let r = self.renderer();
+        sync_call(async move { r.pause().await })
+            .await
+            .map_err(to_fdo)
     }
 
     async fn play_pause(&self) -> fdo::Result<()> {
         let r = self.renderer();
-        match r.state().status {
-            PlaybackStatus::Playing | PlaybackStatus::Buffering => r.pause().await.map_err(to_fdo),
-            _ => r.resume().await.map_err(to_fdo),
-        }
+        sync_call(async move {
+            match r.state().status {
+                PlaybackStatus::Playing | PlaybackStatus::Buffering => r.pause().await,
+                _ => r.resume().await,
+            }
+        })
+        .await
+        .map_err(to_fdo)
     }
 
     async fn stop(&self) -> fdo::Result<()> {
-        self.renderer().stop().await.map_err(to_fdo)
+        let r = self.renderer();
+        sync_call(async move { r.stop().await })
+            .await
+            .map_err(to_fdo)
     }
 
     async fn play(&self) -> fdo::Result<()> {
         // `resume` also kicks a restored-but-not-started queue, so it covers
         // both the paused and the freshly-launched case.
-        self.renderer().resume().await.map_err(to_fdo)
+        let r = self.renderer();
+        sync_call(async move { r.resume().await })
+            .await
+            .map_err(to_fdo)
     }
 
     async fn seek(&self, offset: Time) -> fdo::Result<()> {
         let r = self.renderer();
-        let state = r.state();
-        let target = state.position_secs + offset.as_micros() as f64 / 1_000_000.0;
-        // Spec: seeking past the end of the track acts like Next.
-        if state.duration_secs > 0.0 && target > state.duration_secs {
-            return r.next().await.map_err(to_fdo);
-        }
-        r.seek(target.max(0.0)).await.map_err(to_fdo)
+        sync_call(async move {
+            let state = r.state();
+            let target = state.position_secs + offset.as_micros() as f64 / 1_000_000.0;
+            // Spec: seeking past the end of the track acts like Next.
+            if state.duration_secs > 0.0 && target > state.duration_secs {
+                return r.next().await;
+            }
+            r.seek(target.max(0.0)).await
+        })
+        .await
+        .map_err(to_fdo)
     }
 
     async fn set_position(&self, track: TrackId, position: Time) -> fdo::Result<()> {
         let r = self.renderer();
-        let state = r.state();
-        // Spec: a stale trackid means the client raced a track change —
-        // silently ignore rather than seeking the wrong song.
-        let Some(current) = &state.now_playing else {
-            return Ok(());
-        };
-        if track != track_id(current) {
-            return Ok(());
-        }
-        let target = position.as_micros() as f64 / 1_000_000.0;
-        if target < 0.0 || (state.duration_secs > 0.0 && target > state.duration_secs) {
-            return Ok(());
-        }
-        r.seek(target).await.map_err(to_fdo)
+        sync_call(async move {
+            let state = r.state();
+            // Spec: a stale trackid means the client raced a track change —
+            // silently ignore rather than seeking the wrong song.
+            let Some(current) = &state.now_playing else {
+                return Ok(());
+            };
+            if track != track_id(current) {
+                return Ok(());
+            }
+            let target = position.as_micros() as f64 / 1_000_000.0;
+            if target < 0.0 || (state.duration_secs > 0.0 && target > state.duration_secs) {
+                return Ok(());
+            }
+            r.seek(target).await
+        })
+        .await
+        .map_err(to_fdo)
     }
 
     async fn open_uri(&self, _uri: String) -> fdo::Result<()> {
@@ -264,8 +311,8 @@ impl PlayerInterface for Player {
     }
 
     async fn set_loop_status(&self, status: LoopStatus) -> zbus::Result<()> {
-        self.renderer()
-            .set_repeat(repeat_mode(status))
+        let r = self.renderer();
+        sync_call(async move { r.set_repeat(repeat_mode(status)).await })
             .await
             .map_err(to_zbus)
     }
@@ -284,7 +331,10 @@ impl PlayerInterface for Player {
     }
 
     async fn set_shuffle(&self, shuffle: bool) -> zbus::Result<()> {
-        self.renderer().set_shuffle(shuffle).await.map_err(to_zbus)
+        let r = self.renderer();
+        sync_call(async move { r.set_shuffle(shuffle).await })
+            .await
+            .map_err(to_zbus)
     }
 
     async fn metadata(&self) -> fdo::Result<Metadata> {
@@ -296,8 +346,8 @@ impl PlayerInterface for Player {
     }
 
     async fn set_volume(&self, volume: Volume) -> zbus::Result<()> {
-        self.renderer()
-            .set_volume(volume.clamp(0.0, 1.0) as f32)
+        let r = self.renderer();
+        sync_call(async move { r.set_volume(volume.clamp(0.0, 1.0) as f32).await })
             .await
             .map_err(to_zbus)
     }

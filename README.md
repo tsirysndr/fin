@@ -1,5 +1,6 @@
 # fin
 
+[![FlakeHub](https://img.shields.io/endpoint?url=https://flakehub.com/f/tsirysndr/fin/badge)](https://flakehub.com/flake/tsirysndr/fin)
 [![Release](https://github.com/tsirysndr/fin/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/fin/actions/workflows/release.yml)
 
 > a Jellyfin & Subsonic client for the terminal — powered by `symphonia`, `mpv`, Chromecast, and UPnP

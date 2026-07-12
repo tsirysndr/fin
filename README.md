@@ -211,6 +211,9 @@ A flake is provided — mpv is baked into the wrapper, so no extra install
 step is needed:
 
 ```bash
+# Use Cache
+cachix use tsirysndr
+
 # One-off run:
 nix run github:tsirysndr/fin
 

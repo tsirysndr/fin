@@ -3,7 +3,7 @@
 [![FlakeHub](https://img.shields.io/endpoint?url=https://flakehub.com/f/tsirysndr/fin/badge)](https://flakehub.com/flake/tsirysndr/fin)
 [![Release](https://github.com/tsirysndr/fin/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/fin/actions/workflows/release.yml)
 
-> a Jellyfin & Subsonic client for the terminal — powered by `symphonia`, `mpv`, Chromecast, and UPnP
+> a Jellyfin & Subsonic client for the terminal — powered by `rockbox-playback`, `mpv`, Chromecast, and UPnP
 
 ![fin — neon-electric Jellyfin/Subsonic TUI](.github/assets/preview.png)
 
@@ -11,7 +11,7 @@
 **Subsonic** server (Navidrome, Airsonic, Gonic, Astiga, … — the flavour is
 auto-detected at login), searches your library, manages playlists, and pushes
 streams to your local machine
-(**symphonia** for audio, **mpv** for video), any **Chromecast** on your
+(**rockbox-playback** for audio, **mpv** for video), any **Chromecast** on your
 network, or any **UPnP MediaRenderer** (Sonos, Kodi, Roon endpoints, Samsung/LG
 TVs, gmediarender, …). Local playback is now audio-native — HTTP streaming,
 decoding, resampling, and output all run in-process, and audio never touches
@@ -45,6 +45,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
   - [Bass & treble](#bass--treble)
 - [Queue persistence](#queue-persistence)
 - [Remote-renderer queue](#remote-renderer-queue)
+- [Supported audio formats](#supported-audio-formats)
 - [Streams & transcoding](#streams--transcoding)
 - [Development](#development)
 - [License](#license)
@@ -52,9 +53,10 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
 ## Features
 
 - **Ratatui-based TUI** with a neon-electric palette (teal / cyan / violet).
-- **In-process audio** — HTTP streaming + `symphonia` decode (MP3, FLAC, AAC,
-  Opus, Vorbis, ALAC, WAV, …) + resampling + `cpal` output. mpv is used only
-  for video.
+- **In-process audio** — HTTP streaming + `rockbox-playback` decode (MP3,
+  FLAC, AAC, Opus, Vorbis, ALAC, WAV, and [many more](#supported-audio-formats))
+  + resampling + `cpal` output, using Rockbox's own codecs and DSP. mpv is
+  used only for video.
 - **fzf-style instant search** — results update on every keystroke.
 - **Drill-in navigation** — Enter on an album lists its tracks, Enter on a
   series lists its episodes, Enter on a playlist lists its items. `x`
@@ -62,7 +64,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
 - **No list truncation** — Music, Videos, and Playlists fetch every item
   the server has, so nothing stays hidden past an arbitrary limit.
 - **Three renderers**, one interface:
-  - **local** (default) — symphonia + cpal for audio, mpv for video, spawned
+  - **local** (default) — rockbox-playback for audio, mpv for video, spawned
     only when needed.
   - **chromecast** — device discovery via mDNS, playback through the Default
     Media Receiver, with a **local queue** that auto-advances on `FINISHED`.
@@ -72,7 +74,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
 - **Cast *to* fin** — while the TUI runs, fin advertises itself as a
   **UPnP MediaRenderer** on the LAN. Push streams at it from BubbleUPnP,
   Kodi, Jellyfin's "Play On", or any other control point: audio decodes
-  in-process via symphonia, video opens in mpv, and the pushed track lands
+  in-process via rockbox-playback, video opens in mpv, and the pushed track lands
   in the Now Playing bar with a `⇊ UPnP` badge. On by default; opt out with
   `--no-media-renderer` or `media_renderer.enabled = false`
   (see [UPnP MediaRenderer](#upnp-mediarenderer--casting-to-fin)).
@@ -125,12 +127,12 @@ Download the `.deb` for your architecture from the
 
 ```bash
 # amd64
-curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.5.0_amd64.deb
-sudo apt install ./fin_0.5.0_amd64.deb
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.6.0_amd64.deb
+sudo apt install ./fin_0.6.0_amd64.deb
 
 # arm64 (Raspberry Pi 4/5, Apple-silicon VM, …)
-curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.5.0_arm64.deb
-sudo apt install ./fin_0.5.0_arm64.deb
+curl -LO https://github.com/tsirysndr/fin/releases/latest/download/fin_0.6.0_arm64.deb
+sudo apt install ./fin_0.6.0_arm64.deb
 ```
 
 `apt` will pull in `libasound2` (ALSA runtime for cpal) and `mpv` automatically.
@@ -147,7 +149,7 @@ sudo apt update && sudo apt install fin
 
 ```bash
 sudo dnf install \
-  https://github.com/tsirysndr/fin/releases/latest/download/fin-0.5.0-1.x86_64.rpm
+  https://github.com/tsirysndr/fin/releases/latest/download/fin-0.6.0-1.x86_64.rpm
 ```
 
 Or via the Gemfury yum repo:
@@ -254,7 +256,7 @@ Three ways to choose a renderer — all equivalent:
 | _(none — falls back to local)_         |                           |                                |
 
 The `--mpv` / `renderer = "mpv"` flag name is historical; it selects the
-**local** renderer, which uses symphonia+cpal for audio and mpv for video.
+**local** renderer, which uses rockbox-playback for audio and mpv for video.
 
 When you pass `--chromecast NAME` or `--upnp NAME`, the renderer is switched
 to that protocol automatically and the named device is preferred on connect.
@@ -269,7 +271,7 @@ Kodi, Jellyfin's "Play On", gupnp tools, another fin casting with
 `--upnp`, … — can push media at this machine.
 
 Incoming streams take the same local path as everything else: **audio is
-decoded in-process by symphonia** (never mpv), **video is handed to mpv**.
+decoded in-process by rockbox-playback** (never mpv), **video is handed to mpv**.
 The pushed track appears in the Now Playing bar with a violet `⇊ UPnP`
 badge and a one-shot status line (`⇊ receiving UPnP cast — <title>`), joins
 the queue like any other item, and answers the normal transport keys —
@@ -606,11 +608,70 @@ automatically the moment the current one finishes (Chromecast:
 UPnP renderers without a `RenderingControl` service (rare, but it happens)
 still work for transport — volume changes are just no-ops on the device.
 
+## Supported audio formats
+
+Local audio is decoded in-process by
+[`rockbox-playback`](https://crates.io/crates/rockbox-playback), which uses
+Rockbox's own firmware codecs — the full 29-codec static-link set, all
+enabled. Any of these plays gapless, with ReplayGain, crossfade and the EQ
+straight through the same path:
+
+### Lossless
+
+| Format               | Typical extension | Notes                         |
+| -------------------- | ----------------- | ----------------------------- |
+| FLAC                 | `.flac`           |                               |
+| Apple Lossless       | `.m4a`            | ALAC                          |
+| WavPack              | `.wv`             |                               |
+| Monkey's Audio       | `.ape`            |                               |
+| True Audio           | `.tta`            |                               |
+| Shorten              | `.shn`            |                               |
+
+### Lossy
+
+| Format               | Typical extension | Notes                         |
+| -------------------- | ----------------- | ----------------------------- |
+| MP3 / MP2 / MP1      | `.mp3` `.mp2`     | MPEG audio (incl. MP3-in-ASF) |
+| AAC / HE-AAC         | `.m4a` `.aac`     | incl. AAC+ / SBR              |
+| Ogg Vorbis           | `.ogg`            |                               |
+| Opus                 | `.opus`           |                               |
+| Musepack             | `.mpc`            | SV7 / SV8                     |
+| Speex                | `.spx`            |                               |
+| WMA v1 / v2          | `.wma`            | in ASF                        |
+| WMA Professional     | `.wma`            |                               |
+| AC3 (A/52)           | `.ac3`            |                               |
+| RealAudio Cook       | `.ra` `.rm`       |                               |
+| AAC in RealMedia     | `.rm`             |                               |
+| ATRAC3               | `.oma` `.aa3`     | Sony OMA + RealMedia          |
+
+### Uncompressed / PCM
+
+| Format               | Typical extension | Notes                         |
+| -------------------- | ----------------- | ----------------------------- |
+| WAV                  | `.wav`            | PCM + the ADPCM family        |
+| AIFF                 | `.aiff` `.aif`    |                               |
+| Sun AU / SND         | `.au` `.snd`      |                               |
+| Sony Wave64          | `.w64`            |                               |
+| SMAF                 | `.mmf`            | Yamaha mobile                 |
+| Dialogic VOX         | `.vox`            | ADPCM                         |
+
+### Specialized / game audio
+
+| Format               | Typical extension | Notes                         |
+| -------------------- | ----------------- | ----------------------------- |
+| CRI ADX              | `.adx`            |                               |
+| Amiga MOD            | `.mod`            |                               |
+
+> Chiptune emulator formats (SPC, SID, NSF/GBS/HES/KSS/AY/SGC/VGM/VTX, SAP)
+> are **not** supported — they need Rockbox's one-codec-at-a-time model and
+> are excluded from the static-link set fin builds against.
+
 ## Streams & transcoding
 
-- Local **audio** uses the original stream — `symphonia` decodes MP3 / FLAC
-  / AAC / ALAC / Opus / Vorbis / WAV / … directly in-process, resampled to
-  the output device's rate. No transcoding round-trip; no mpv on the audio
+- Local **audio** uses the original stream — `rockbox-playback` decodes it
+  in-process with Rockbox's codecs (see
+  [Supported audio formats](#supported-audio-formats)), resampled to the
+  output device's rate. No transcoding round-trip; no mpv on the audio
   path.
 - Local **video** shells out to **mpv** with `Static=true` — the fastest
   direct-stream path, mpv handles any container Jellyfin can hand it.
@@ -642,7 +703,7 @@ fin/
 │   ├── fin-subsonic/      # Subsonic HTTP API client (Navidrome, Airsonic, …)
 │   ├── fin-media/         # MediaClient trait over both backends + login probe
 │   ├── fin-mediarenderer/ # built-in UPnP MediaRenderer — casting *to* fin
-│   ├── fin-player/        # Renderer trait, queue, symphonia audio path,
+│   ├── fin-player/        # Renderer trait, queue, rockbox-playback audio path,
 │   │                      # mpv video, Chromecast + UPnP, replaygain,
 │   │                      # crossfade, queue persistence
 │   └── fin-tui/           # Ratatui neon TUI

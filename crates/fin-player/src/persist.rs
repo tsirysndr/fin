@@ -1,6 +1,6 @@
 //! Background persistence of the playback queue.
 //!
-//! The `SymphoniaPlayer` worker sends a `PersistedQueue` snapshot whenever
+//! The `RockboxPlayer` sends a `PersistedQueue` snapshot whenever
 //! the queue mutates or every few seconds while playing. A dedicated writer
 //! thread coalesces bursts (rapid consecutive mutations only produce one
 //! disk write) and atomically renames a `.tmp` into place, so a crash mid-

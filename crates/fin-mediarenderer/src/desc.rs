@@ -15,7 +15,7 @@ pub fn device_description(friendly_name: &str, uuid: &str) -> String {
 <friendlyName>{name}</friendlyName>
 <manufacturer>tsirysndr</manufacturer>
 <manufacturerURL>https://github.com/tsirysndr/fin</manufacturerURL>
-<modelDescription>fin terminal media player — symphonia audio, mpv video</modelDescription>
+<modelDescription>fin terminal media player — rockbox-playback audio, mpv video</modelDescription>
 <modelName>fin</modelName>
 <modelNumber>{version}</modelNumber>
 <modelURL>https://github.com/tsirysndr/fin</modelURL>
@@ -313,7 +313,7 @@ pub fn connection_manager_scpd() -> String {
     scpd(actions, vars)
 }
 
-/// Everything symphonia (audio) or mpv (video) can realistically take.
+/// Everything rockbox-playback (audio) or mpv (video) can realistically take.
 /// Control points filter their "cast to" pickers on this list.
 pub const SINK_PROTOCOL_INFO: &str = "http-get:*:audio/mpeg:*,\
 http-get:*:audio/mp3:*,\

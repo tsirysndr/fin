@@ -41,7 +41,7 @@ pub const HELP_SECTIONS: &[HelpSection] = &[
             HelpEntry { key: "/", description: "focus Search input" },
             HelpEntry { key: "r", description: "refresh current screen" },
             HelpEntry { key: "t", description: "cycle to next saved server (Jellyfin or Subsonic)" },
-            HelpEntry { key: "m", description: "switch to local (symphonia + mpv) renderer" },
+            HelpEntry { key: "m", description: "switch to local (rockbox-playback + mpv) renderer" },
             HelpEntry { key: "q / Ctrl+C", description: "quit" },
         ],
     },

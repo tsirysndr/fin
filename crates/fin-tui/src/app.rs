@@ -999,7 +999,7 @@ impl App {
     }
 
     async fn switch_to_mpv(&self) {
-        // Local playback: audio → symphonia, video → mpv. Persistence is
+        // Local playback: audio → rockbox-playback, video → mpv. Persistence is
         // wired in so switching to local while there's a saved queue picks
         // it up on next restart (the current session keeps whatever queue
         // was already active).
@@ -1014,7 +1014,7 @@ impl App {
             cfg.renderer = RendererPref::Mpv;
             let _ = cfg.save();
         }
-        self.set_status("Streaming locally (symphonia audio, mpv video).");
+        self.set_status("Streaming locally (rockbox-playback audio, mpv video).");
     }
 }
 

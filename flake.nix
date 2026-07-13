@@ -42,15 +42,20 @@
           inherit src;
 
           pname = "fin";
-          version = "0.5.0";
+          version = "0.6.0";
           strictDeps = true;
 
-          # No native TLS or system libs needed — pure Rust deps.
+          # rockbox-playback pulls in rockbox-codecs + rockbox-dsp, whose
+          # build scripts compile Rockbox's C codec/DSP sources with the `cc`
+          # crate — so a C compiler must be on PATH. `stdenv.cc` is the
+          # toolchain for this platform (clang on Darwin, gcc on Linux).
+          # TLS is pure-Rust (rustls), so still no openssl.
           # Modern nixpkgs (post-25.05) auto-links the Darwin SDK, so no
           # framework references here — `darwin.apple_sdk_11_0` was removed
           # as a legacy compatibility stub.
           nativeBuildInputs = [
             pkgs.pkg-config
+            pkgs.stdenv.cc
           ] ++ lib.optionals pkgs.stdenv.isDarwin [
             # coreaudio-sys generates its CoreAudio bindings with bindgen at
             # build time; bindgenHook provides libclang (LIBCLANG_PATH) and
@@ -157,7 +162,9 @@
           inputsFrom = builtins.attrValues self.checks.${system};
 
           # Build-time tools. pkg-config is required so cpal's build.rs can
-          # resolve libasound on Linux.
+          # resolve libasound on Linux; stdenv.cc supplies the C compiler the
+          # rockbox-codecs / rockbox-dsp build scripts need to compile
+          # Rockbox's C sources.
           nativeBuildInputs = with pkgs; [
             cargo
             rustc
@@ -166,6 +173,7 @@
             rust-analyzer
             mpv
             pkg-config
+            stdenv.cc
           ];
 
           # Link-time libraries. Position matters: pkg-config only picks up

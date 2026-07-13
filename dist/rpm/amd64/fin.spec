@@ -1,5 +1,5 @@
 Name:           fin
-Version:        0.5.0
+Version:        0.6.0
 Release:        1%{?dist}
 Summary:        A neon-electric Jellyfin TUI client for mpv & Chromecast
 

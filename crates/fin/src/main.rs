@@ -32,11 +32,11 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // preflight: mpv is needed for *video* only — audio is decoded in-process
-    // via symphonia. Warn once if it's missing so video playback fails loudly
+    // via rockbox-playback. Warn once if it's missing so video playback fails loudly
     // with an actionable message rather than silently.
     if !preflight::probe_mpv() {
         eprintln!(
-            "note: mpv not found on PATH — audio still works (symphonia + cpal),\n\
+            "note: mpv not found on PATH — audio still works (rockbox-playback),\n\
              but video playback will fail. Install with:\n  {}\n",
             preflight::mpv_install_hint()
         );
@@ -223,7 +223,7 @@ async fn build_renderer(cfg: &Config) -> Result<(Arc<dyn Renderer>, String)> {
     match cfg.renderer {
         RendererPref::Mpv => {
             // "Mpv" pref = local playback. Audio decodes in-process via
-            // symphonia; video still shells out to mpv. See `LocalRenderer`.
+            // rockbox-playback; video still shells out to mpv. See `LocalRenderer`.
             let queue_path = fin_config::queue_path().ok();
             let saved = queue_path
                 .as_ref()
@@ -342,7 +342,7 @@ async fn run_tui_cmd(mut cfg: Config) -> Result<()> {
     };
 
     // The MediaRenderer device drives the same renderer cell the TUI holds,
-    // so an incoming cast plays through symphonia (audio) / mpv (video) and
+    // so an incoming cast plays through rockbox-playback (audio) / mpv (video) and
     // shows up in the Now Playing bar like any other queue item.
     let server = if mr.enabled {
         let opts = fin_mediarenderer::Options {

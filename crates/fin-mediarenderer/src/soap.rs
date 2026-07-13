@@ -2,7 +2,7 @@
 //!
 //! This is where an external control point's actions turn into calls on the
 //! shared `Renderer`: `SetAVTransportURI` + `Play` build a `QueueItem` whose
-//! `is_video` flag makes `LocalRenderer` route audio to symphonia and video
+//! `is_video` flag makes `LocalRenderer` route audio to rockbox-playback and video
 //! to mpv; the transport/volume queries read the same live `PlaybackState`
 //! the TUI shows.
 

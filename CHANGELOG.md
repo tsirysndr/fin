@@ -5,6 +5,28 @@ All notable changes to `fin` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-13
+
+### Changed
+- **Local audio now plays through `rockbox-playback`** — the hand-rolled
+  symphonia + cpal decoder (queue, shuffle/repeat, resume, ReplayGain,
+  crossfade, EQ/tone DSP and HTTP streaming, ~2200 lines) is replaced by
+  the `rockbox-playback` engine, which provides all of that natively on
+  top of Rockbox's own codecs and DSP. The renderer (`RockboxPlayer`) is
+  now a thin adapter over its `Player`, running on a dedicated worker
+  thread. Playback behavior is unchanged from the outside; internally the
+  crossfade is now a faithful port of Rockbox's `pcmbuf` mixer and the
+  full Rockbox DSP chain is available. The queue order and exact playhead
+  persist via the engine's own resume file, with fin's `queue.json` kept
+  as a metadata sidecar so server-provided titles and artwork still show
+  after a restart.
+
+### Note
+- `rockbox-playback` is licensed **GPL-2.0-or-later** (it links Rockbox's
+  C codec and DSP sources), so the `fin` binary is now GPL when built with
+  local playback — already the case previously via `rockbox-dsp`. Nix
+  builds gain a `stdenv.cc` dependency to compile those C sources.
+
 ## [0.5.0] - 2026-07-08
 
 ### Added
@@ -138,6 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fzf-style instant search, playlist browsing, and drill-in navigation.
 - Full pagination of the Items endpoint so large libraries load completely.
 
+[0.6.0]: https://github.com/tsirysndr/fin/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tsirysndr/fin/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tsirysndr/fin/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tsirysndr/fin/compare/v0.3.0...v0.3.1

@@ -42,7 +42,7 @@
           inherit src;
 
           pname = "fin";
-          version = "0.5.0";
+          version = "0.6.0";
           strictDeps = true;
 
           # rockbox-playback pulls in rockbox-codecs + rockbox-dsp, whose

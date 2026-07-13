@@ -1,7 +1,7 @@
 use std::process::Command;
 
 /// Check whether mpv is on `$PATH`. Audio playback goes through the built-in
-/// symphonia + cpal path and doesn't need mpv, so a missing binary is only
+/// rockbox-playback path and doesn't need mpv, so a missing binary is only
 /// a problem when the user tries to play video. We surface a hint on the way
 /// in rather than failing outright.
 pub fn probe_mpv() -> bool {

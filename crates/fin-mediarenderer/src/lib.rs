@@ -4,7 +4,7 @@
 //! image: it advertises this machine on the LAN (SSDP), serves the device /
 //! service description XML plus SOAP control endpoints over a tiny embedded
 //! HTTP server, and routes whatever a control point pushes at us into the
-//! local playback stack — audio lands in the in-process symphonia player,
+//! local playback stack — audio lands in the in-process rockbox-playback player,
 //! video is handed to mpv. The split happens for free by driving the shared
 //! [`fin_player::LocalRenderer`] through the same `Renderer` trait the TUI
 //! uses, so incoming casts show up in the Now Playing bar and respond to the

@@ -124,10 +124,10 @@ pub fn parse_didl(didl: &str) -> CastMeta {
     }
 }
 
-/// Audio vs video decides the whole downstream path (symphonia vs mpv), so
+/// Audio vs video decides the whole downstream path (rockbox-playback vs mpv), so
 /// check every signal in confidence order: DIDL `upnp:class`, then the
 /// protocolInfo MIME, then the URL extension. Unknown defaults to audio —
-/// symphonia fails fast and loud, mpv would pop a window.
+/// rockbox-playback fails fast and loud, mpv would pop a window.
 pub fn is_video(meta: &CastMeta, uri: &str) -> bool {
     if let Some(class) = &meta.upnp_class {
         if class.contains("videoItem") {

@@ -24,17 +24,16 @@ url.workspace = true
 fin-jellyfin.workspace = true
 fin-config.workspace = true
 
-# Local audio-only playback: fetch → symphonia decode → cpal output.
-# mpv is only used for video; audio never touches mpv.
-symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
-cpal = "0.15"
-rb = "0.4"
-
 # Shuffle uses Fisher-Yates via `rand` — pulled in as a transitive dep
 # already, so this is a zero-cost explicit dep.
 rand = "0.9"
 
-# Rockbox DSP pipeline — 10-band EQ, tone controls, ReplayGain pre-gain,
-# resample, crossfeed, … Note: the compiled C sources are
-# GPL-2.0-or-later — linking makes the binary GPL when EQ code is included.
-rockbox-dsp = "0.2"
+# Local audio-only playback engine. Owns the queue, transport, shuffle/
+# repeat, exact-position resume, ReplayGain, crossfade and the full Rockbox
+# DSP chain (10-band EQ, tone controls, …) plus HTTP(S) streaming — the
+# `http` feature is on by default. Decoding is done by Rockbox's own codecs
+# and output goes straight to cpal; mpv is only used for video.
+#
+# Note: rockbox-playback is GPL-2.0-or-later (it links the Rockbox C codec
+# and DSP sources), so linking it makes the fin binary GPL.
+rockbox-playback = "0.4"

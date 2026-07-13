@@ -148,7 +148,7 @@ pub trait Renderer: Send + Sync {
     }
 
     /// Update crossfade settings (mode + duration). Only the local
-    /// SymphoniaPlayer implements this; Chromecast + UPnP receivers each
+    /// RockboxPlayer implements this; Chromecast + UPnP receivers each
     /// manage their own track transitions.
     async fn set_crossfade(&self, _settings: CrossfadeSettings) -> anyhow::Result<()> {
         Ok(())
@@ -156,7 +156,7 @@ pub trait Renderer: Send + Sync {
 
     /// Enable/disable the Rockbox 10-band equalizer and load the band
     /// coefficients. `bands` is truncated to `EQ_NUM_BANDS`. Only the local
-    /// SymphoniaPlayer implements this — non-local receivers each apply
+    /// RockboxPlayer implements this — non-local receivers each apply
     /// their own EQ (or none).
     async fn set_eq(&self, _enabled: bool, _bands: Vec<EqBand>) -> anyhow::Result<()> {
         Ok(())
@@ -164,7 +164,7 @@ pub trait Renderer: Send + Sync {
 
     /// Bass/treble shelf gains in whole dB, plus optional cutoffs in Hz
     /// (0 = Rockbox defaults 200 Hz bass, 3500 Hz treble). Only the local
-    /// SymphoniaPlayer applies these; non-local receivers no-op.
+    /// RockboxPlayer applies these; non-local receivers no-op.
     async fn set_tone(
         &self,
         _bass_db: i32,

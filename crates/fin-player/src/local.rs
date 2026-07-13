@@ -1,5 +1,5 @@
 //! Local renderer — routes each item to the right backend:
-//! audio → symphonia (never mpv), video → mpv.
+//! audio → rockbox-playback (never mpv), video → mpv.
 //!
 //! To the caller this looks like a single `Renderer`. Internally we keep a
 //! merged queue view so pause/next/prev/etc. hit whichever backend is
@@ -21,7 +21,7 @@ use crate::persist::PersistedQueue;
 use crate::queue::{QueueItem, RepeatMode};
 use crate::renderer::{PlaybackState, PlaybackStatus, Renderer, RendererKind};
 use crate::replaygain::ReplayGainSettings;
-use crate::symphonia_player::SymphoniaPlayer;
+use crate::rockbox_player::RockboxPlayer;
 
 /// Which backend is currently sourcing playback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +32,7 @@ enum Active {
 }
 
 pub struct LocalRenderer {
-    audio: Arc<SymphoniaPlayer>,
+    audio: Arc<RockboxPlayer>,
     video: Arc<MpvRenderer>,
     active: Arc<Mutex<Active>>,
 }
@@ -42,12 +42,12 @@ impl LocalRenderer {
         Self::with_persist(None)
     }
 
-    /// Build a LocalRenderer whose SymphoniaPlayer persists its queue to
+    /// Build a LocalRenderer whose RockboxPlayer persists its queue to
     /// `queue_path`. mpv's video queue is transient by design — a video
     /// process spawns per session and doesn't persist.
     pub fn with_persist(queue_path: Option<PathBuf>) -> Self {
         Self {
-            audio: Arc::new(SymphoniaPlayer::with_persist(queue_path)),
+            audio: Arc::new(RockboxPlayer::with_persist(queue_path)),
             video: Arc::new(MpvRenderer::new(None)),
             active: Arc::new(Mutex::new(Active::None)),
         }
@@ -120,7 +120,10 @@ impl Renderer for LocalRenderer {
             Active::Audio => {
                 let filtered = filter_kind(items, false);
                 let idx = start_index.min(filtered.len().saturating_sub(1));
-                debug!(items = filtered.len(), "local: routing audio → symphonia");
+                debug!(
+                    items = filtered.len(),
+                    "local: routing audio → rockbox-playback"
+                );
                 self.set_active(Active::Audio);
                 self.audio.play(filtered, idx).await
             }
@@ -280,7 +283,7 @@ impl Renderer for LocalRenderer {
     async fn restore(&self, snapshot: PersistedQueue) -> Result<()> {
         // Restore always goes to the audio path — that's where persistence
         // lives. If the snapshot has video items they're dropped by the
-        // SymphoniaPlayer's Restore handler.
+        // RockboxPlayer's restore handler.
         self.set_active(Active::Audio);
         self.audio.restore(snapshot).await
     }

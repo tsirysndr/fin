@@ -1,0 +1,56 @@
+{
+  "name": "@tsiry/fin",
+  "version": "0.6.0",
+  "description": "A fast terminal music player and Subsonic/Jellyfin client written in Rust.",
+  "keywords": [
+    "subsonic",
+    "jellyfin",
+    "music-player",
+    "tui",
+    "terminal",
+    "mpris",
+    "upnp",
+    "cli"
+  ],
+  "homepage": "https://github.com/tsirysndr/fin#readme",
+  "bugs": {
+    "url": "https://github.com/tsirysndr/fin/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsirysndr/fin.git"
+  },
+  "license": "MPL-2.0",
+  "author": "Tsiry Sandratraina <tsiry.sndr@rocksky.app>",
+  "bin": {
+    "fin": "bin/cli.js"
+  },
+  "files": [
+    "bin/cli.js",
+    "lib/platform.js",
+    "lib/download.js",
+    "scripts/postinstall.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "freebsd",
+    "netbsd",
+    "openbsd"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

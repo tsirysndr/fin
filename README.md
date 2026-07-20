@@ -21,6 +21,7 @@ mpv. Remote playback is fully queued, with client-side auto-advance.
 
 - [Features](#features)
 - [Install](#install)
+  - [npm — `npx @tsiry/fin`](#npm--npx-tsiryfin)
   - [macOS / Linux — Homebrew](#macos--linux--homebrew)
   - [Debian / Ubuntu — `.deb`](#debian--ubuntu--deb)
   - [Fedora / RHEL / openSUSE — `.rpm`](#fedora--rhel--opensuse--rpm)
@@ -111,6 +112,21 @@ Local audio needs no extra binaries — everything is baked into the `fin`
 binary. **`mpv`** is only needed on `$PATH` when you actually play video
 locally. Every install path below either bundles it or pulls it in as a
 soft dependency.
+
+### npm — `npx @tsiry/fin`
+
+```bash
+# Run without installing
+npx @tsiry/fin
+
+# Or install globally
+npm install -g @tsiry/fin
+```
+
+Works on macOS / Linux / FreeBSD / NetBSD / OpenBSD (x64 and arm64; OpenBSD is
+x64 only). The prebuilt binary matching your platform is downloaded from the
+GitHub release and SHA-256 verified on install. Install **`mpv`** separately if
+you want local video playback.
 
 ### macOS / Linux — Homebrew
 

@@ -1,2 +1,4 @@
 target/
 
+# Separate application checkout used by manually dispatched Dagger workflows.
+/.source/

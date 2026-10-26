@@ -729,3 +729,8 @@ fin/
 ## License
 
 `fin` is released under the [MPL-2.0](LICENSE).
+
+## CI pipelines
+
+Portable GitHub Actions jobs use [PureScript Dagger modules](.dagger/README.md).
+See that guide for commands, caching, and the jobs that remain native.

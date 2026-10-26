@@ -1,10 +1,9 @@
 module CI.Build (buildArgs, linuxRelease) where
 
 import Prelude
+import CI.Package as Package
 import Dagger (Client)
 import Dagger.Container as Container
-import Dagger.CurrentModule as CurrentModule
-import Dagger.Directory as Directory
 import Dagger.Modules as Module
 import Dagger.Query as Query
 import Dagger.Types (Container, Directory)
@@ -20,9 +19,6 @@ buildArgs = ado
   target <- Module.argument "target"
   version <- Module.argument "version"
   in { source, target, version }
-
-scripts :: Client -> Directory
-scripts client = Query.currentModule client # CurrentModule.source # Directory.directory "scripts"
 
 withSource :: Directory -> Container -> Container
 withSource source = Container.withDirectoryWith "/src" source
@@ -48,7 +44,8 @@ linuxRelease client args = do
     environment = Query.container client
       # Container.from "rust:bookworm"
       # Container.withExec [ "rustup", "target", "add", args.target ]
-      # Container.withExec [ "sh", "-c", "apt-get update && apt-get install -y --no-install-recommends libasound2-dev pkg-config cmake && rm -rf /var/lib/apt/lists/*" ]
+      # Container.withExec [ "apt-get", "update" ]
+      # Container.withExec [ "apt-get", "install", "-y", "--no-install-recommends", "libasound2-dev", "pkg-config", "cmake" ]
     built = environment
       # withSource args.source
 
@@ -58,15 +55,10 @@ linuxRelease client args = do
       -- Cache mounts cannot be exported directly: materialize the executable.
       # Container.withExec [ "mkdir", "-p", "/binary" ]
       # Container.withExec [ "cp", "target/" <> args.target <> "/release/fin", "/binary/fin" ]
-    packaged = Query.container client
-      # Container.from "node:22-bookworm-slim"
-      # Container.withExec [ "sh", "-c", "apt-get update && apt-get install -y --no-install-recommends dpkg-dev rpm libdigest-sha-perl && rm -rf /var/lib/apt/lists/*" ]
-      # Container.withDirectory "/pipeline" (scripts client)
-      # withSource args.source
-      # Container.withFile "/src/target/fin" (Container.file "/binary/fin" built)
-      # Container.withWorkdir "/src"
-      # Container.withEnvVariable "VERSION" args.version
-      # Container.withEnvVariable "TARGET" args.target
-      # Container.withEnvVariable "LABEL" label
-      # Container.withExec [ "bash", "/pipeline/package.sh" ]
-  pure $ Container.directory "/out" packaged
+  Package.packageRelease client
+    { source: args.source
+    , binary: Container.file "/binary/fin" built
+    , target: args.target
+    , label
+    , version: args.version
+    }

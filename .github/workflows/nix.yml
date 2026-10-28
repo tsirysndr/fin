@@ -48,4 +48,4 @@ jobs:
           key: nix-flake
           volumes: fin-nix-store
           command: |
-            dagger api call -m ci nix-build --source .. --cachix-token env://CACHIX_AUTH_TOKEN --run-id "$WORKFLOW_RUN"
+            dagger --progress logs -v api call -m ci nix-build --source .. --cachix-token env://CACHIX_AUTH_TOKEN --run-id "$WORKFLOW_RUN"
